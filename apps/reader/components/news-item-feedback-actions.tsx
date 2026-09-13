@@ -16,6 +16,8 @@ type NewsItemFeedbackActionsProps = {
   feedback: FeedbackSentiment | null;
   feedbackReason?: FeedbackReason | null;
   likeOnly?: boolean;
+  busy?: boolean;
+  onPendingChange?: (pending: boolean) => void;
   showLabels?: boolean;
   onFeedbackChange?: (feedback: FeedbackSentiment | null, reason: FeedbackReason | null) => void;
 };
@@ -38,6 +40,8 @@ export function NewsItemFeedbackActions({
   feedback,
   feedbackReason = null,
   likeOnly = false,
+  busy = false,
+  onPendingChange,
   showLabels = false,
   onFeedbackChange,
 }: NewsItemFeedbackActionsProps) {
@@ -68,7 +72,7 @@ export function NewsItemFeedbackActions({
   }
 
   async function updateFeedback(sentiment: FeedbackSentiment | null, reason: FeedbackReason = "topic") {
-    if (pendingFeedback) {
+    if (pendingFeedback || busy) {
       return;
     }
 
@@ -77,6 +81,7 @@ export function NewsItemFeedbackActions({
     const previousReason = activeReason;
 
     setError(null);
+    onPendingChange?.(true);
     setPendingFeedback(sentiment || activeFeedback || "less");
     setReasonMenuOpen(false);
     applyFeedback(nextFeedback, nextFeedback ? reason : null);
@@ -93,6 +98,7 @@ export function NewsItemFeedbackActions({
       setError(updateError instanceof Error ? updateError.message : l("Nie udało się zapisać preferencji.", "Could not save your preference."));
     } finally {
       setPendingFeedback(null);
+      onPendingChange?.(false);
     }
   }
 
@@ -114,7 +120,7 @@ export function NewsItemFeedbackActions({
             : l("Polub ten news", "Like this story")
           : l("Więcej takich newsów", "More stories like this")}
         aria-pressed={activeFeedback === "more"}
-        disabled={pendingFeedback !== null}
+        disabled={busy || pendingFeedback !== null}
         onClick={() => void updateFeedback(activeFeedback === "more" ? null : "more", "topic")}
       >
         {pendingFeedback === "more" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <ThumbsUp aria-hidden="true" />}
@@ -131,7 +137,7 @@ export function NewsItemFeedbackActions({
           title={l("Mniej takich newsów", "Fewer stories like this")}
           aria-label={l("Mniej takich newsów", "Fewer stories like this")}
           aria-pressed={activeFeedback === "less"}
-          disabled={pendingFeedback !== null}
+          disabled={busy || pendingFeedback !== null}
           onClick={() => activeFeedback === "less" ? void updateFeedback(null, activeReason || "topic") : setReasonMenuOpen((value) => !value)}
         >
           {pendingFeedback === "less" ? (
@@ -148,7 +154,7 @@ export function NewsItemFeedbackActions({
             variant={activeReason === "source" ? "secondary" : "ghost"}
             size="sm"
             type="button"
-            disabled={pendingFeedback !== null}
+            disabled={busy || pendingFeedback !== null}
             onClick={() => void updateFeedback("more", "source")}
           >
             {l("Preferuj źródło", "Prefer source")}
@@ -157,7 +163,7 @@ export function NewsItemFeedbackActions({
             variant={activeReason === "entity" ? "secondary" : "ghost"}
             size="sm"
             type="button"
-            disabled={pendingFeedback !== null}
+            disabled={busy || pendingFeedback !== null}
             onClick={() => void updateFeedback("more", "entity")}
           >
             {l("Preferuj temat", "Prefer topic")}

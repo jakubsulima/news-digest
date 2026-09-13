@@ -1,5 +1,7 @@
 import "server-only";
 
+import { z } from "zod";
+
 import type { Json } from "./database.types";
 import { readingTimeMinutesForDigestBrief, wordCount } from "./digest-brief-text";
 import { plainTextFromHtml } from "./text";
@@ -37,6 +39,7 @@ export type NvidiaArticlePreview = {
 };
 
 export type DigestBriefArticle = {
+  storyClusterId?: string;
   category: string;
   evidence?: Json;
   importanceScore: number;
@@ -352,18 +355,6 @@ function parseSectionParagraphs(
   });
 }
 
-function fallbackSectionTitle(category: string) {
-  const labels: Record<string, string> = {
-    ai: "AI",
-    business: "Biznes i gospodarka",
-    geopolitics: "Geopolityka",
-    security: "Cyberbezpieczeństwo",
-    software: "Technologia i software",
-  };
-
-  return labels[category.toLowerCase()] || category;
-}
-
 export function fallbackDigestBrief(articles: DigestBriefArticle[]): NvidiaDigestBrief {
   const highlights = articles.slice(0, 5).map((article, articleIndex) => ({
     articleIndex,
@@ -373,22 +364,15 @@ export function fallbackDigestBrief(articles: DigestBriefArticle[]): NvidiaDiges
       30,
     ),
   }));
-  const sections = Array.from(new Set(articles.map((article) => article.category))).slice(0, 5).map((category) => {
-    const articleIndexes = articles.flatMap((article, articleIndex) =>
-      article.category === category ? [articleIndex] : [],
-    ).slice(0, 6);
-    const categoryArticles = articleIndexes.map((articleIndex) => articles[articleIndex]);
-
-    return {
-      category,
-      paragraphs: [
-        {
-          articleIndexes,
-          text: compactToWordLimit(categoryArticles.map((article) => article.summary).join(" "), 65),
-        },
-      ],
-      title: fallbackSectionTitle(category),
-    };
+  const stories = new Map<string, number[]>();
+  articles.forEach((article, index) => {
+    const key = article.storyClusterId || String(index);
+    stories.set(key, [...(stories.get(key) || []), index]);
+  });
+  const sections = [...stories.values()].map(articleIndexes => {
+    const article = articles[articleIndexes[0]];
+    return { category: article.category, title: article.title,
+      paragraphs: [{ articleIndexes, text: article.summary }] };
   });
   const subject = articles.length === 1 ? "jedną wybraną wiadomość" : "wybrane wiadomości";
 
@@ -579,16 +563,40 @@ export function validateDigestBriefQuality(brief: NvidiaDigestBrief) {
   };
 }
 
+export type BriefValidationReport = { hardErrors: string[]; warnings: string[]; valid: boolean };
+
+function validateRawBrief(content: string, count: number): string[] {
+  const index = z.number().int().min(0).max(count - 1);
+  const indexes = z.array(index).min(1);
+  const text = z.string().trim().min(1);
+  const schema = z.object({
+    summary: text, coverageNote: text, summaryArticleIndexes: indexes,
+    highlights: z.array(z.object({ articleIndex: index, whatHappened: text, whyItMatters: text })).min(1),
+    sections: z.array(z.object({ category: text, title: text,
+      paragraphs: z.array(z.object({ articleIndexes: indexes, text })).min(1),
+    })).min(1),
+    watchlist: z.array(z.object({ articleIndexes: indexes, signal: text, why: text })),
+  });
+  const result = schema.safeParse(jsonObjectFromModelOutput(content));
+  if (!result.success) return result.error.issues.map(issue => `${issue.path.join(".")}: ${issue.message}`).slice(0, 20);
+  if (result.data.summaryArticleIndexes.some(i => !result.data.highlights.some(h => h.articleIndex === i))) return ["Every lead reference must occur in highlights."];
+  return [];
+}
+
 export async function digestBriefWithNvidia({
   articles,
   interestProfile,
   model = nvidiaModel(),
   timeoutMs = DAILY_BRIEF_INITIAL_TIMEOUT_MS,
+  repairInstructions,
+  onValidation,
 }: {
   articles: DigestBriefArticle[];
   interestProfile: DigestBriefInterestProfile;
   model?: string;
   timeoutMs?: number;
+  repairInstructions?: string;
+  onValidation?: (report: BriefValidationReport) => void;
 }): Promise<NvidiaDigestBrief> {
   const fallback = fallbackDigestBrief(articles);
 
@@ -661,7 +669,7 @@ ${briefShape}`;
         messages: [
           {
             role: "system",
-            content: systemPrompt,
+            content: systemPrompt + (repairInstructions ? `\nRepair the previous response: ${repairInstructions}` : ""),
           },
           {
             role: "user",
@@ -683,9 +691,11 @@ ${sourceMaterial}
     });
 
     const articleCount = promptArticles.length;
-    const firstBrief = content ? parseDigestBriefJson(content, articleCount) : null;
+    const rawErrors = content ? validateRawBrief(content, articleCount) : ["No model response; return a complete JSON briefing."];
+    const firstBrief = content && !rawErrors.length ? parseDigestBriefJson(content, articleCount) : null;
     const firstQuality = firstBrief ? validateDigestBriefQuality(firstBrief) : null;
 
+    onValidation?.(firstQuality ?? { valid: false, warnings: [], hardErrors: rawErrors.length ? rawErrors : ["Invalid briefing structure. Return all required fields with nonempty text and valid source references."] });
     if (!content) {
       return fallback;
     }
@@ -710,6 +720,7 @@ ${sourceMaterial}
 }
 
 export type DigestBriefGenerationResult = {
+  validationReport?: BriefValidationReport;
   brief: NvidiaDigestBrief;
   model: string;
   status: "generated" | "retryable_failure" | "configuration_error";
@@ -721,11 +732,13 @@ export async function generateDigestBriefWithNvidia({
   attempt,
   interestProfile,
   timeoutMs,
+  repairInstructions,
 }: {
   articles: DigestBriefArticle[];
   attempt: number;
   interestProfile: DigestBriefInterestProfile;
   timeoutMs?: number;
+  repairInstructions?: string;
 }): Promise<DigestBriefGenerationResult> {
   const fallback = fallbackDigestBrief(articles);
   const model = attempt % 2 === 0 ? nvidiaFallbackModel() : nvidiaModel();
@@ -734,11 +747,13 @@ export async function generateDigestBriefWithNvidia({
     return { brief: fallback, errorCode: "configuration_error", model, status: "configuration_error" };
   }
 
-  const brief = await digestBriefWithNvidia({ articles, interestProfile, model, timeoutMs });
+  let validationReport: BriefValidationReport = { valid: false, warnings: [], hardErrors: ["Upstream request failed; return a complete JSON briefing."] };
+  const brief = await digestBriefWithNvidia({ articles, interestProfile, model, timeoutMs, repairInstructions, onValidation: report => { validationReport = report; } });
   const usedFallback = brief.coverageNote === fallback.coverageNote && brief.summary === fallback.summary;
 
   return {
     brief,
+    validationReport,
     errorCode: usedFallback ? "invalid_output_or_upstream_error" : null,
     model,
     status: usedFallback ? "retryable_failure" : "generated",

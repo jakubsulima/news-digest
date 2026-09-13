@@ -83,7 +83,7 @@ export default async function HomePage() {
             ) : null
           }
         />
-        {brief ? <DigestBriefCard brief={brief} interactionsByNewsItemId={interactionsByNewsItemId} /> : null}
+        {brief ? <DigestBriefCard brief={brief} canRetryAi={digestRun?.id === brief.digestRunId && digestRun?.status === "succeeded" && ["fallback", "skipped", "failed"].includes(digestRun.briefJob?.status || "")} interactionsByNewsItemId={interactionsByNewsItemId} /> : null}
       </main>
     </>
   );

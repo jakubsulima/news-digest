@@ -1,5 +1,7 @@
 import "server-only";
 
+import { fallbackDigestBrief } from "./ai-summary";
+import { DIGEST_BRIEF_PROMPT_VERSION, materializeBrief } from "./digest-brief-job";
 import type { Json } from "./database.types";
 import { readingTimeMinutesForDigestBrief } from "./digest-brief-text";
 import { createSupabaseAdminClient } from "./supabase";
@@ -28,6 +30,7 @@ export type DigestBriefSummaryReference = DigestBriefReference & {
 };
 
 export type DigestBriefSupport = {
+  sourceNames?: string[];
   fullTextSourceCount: number;
   independentSourceCount: number;
   status: EvidenceStatus;
@@ -50,6 +53,10 @@ export type DigestBriefWatchItem = {
 };
 
 export type DigestBrief = {
+  generationKind?: "ai" | "fallback" | "legacy";
+  generationReason?: string | null;
+  createdAt?: string | null;
+  digestRunId?: string | null;
   coverageNote: string;
   digestDate: string;
   highlights: DigestBriefHighlight[];
@@ -65,6 +72,7 @@ export type LocalizedDigestBrief = DigestBrief & {
 };
 
 export type DigestBriefFallbackArticle = {
+  storyClusterId?: string | null;
   category: string;
   digestDate: string;
   id: string;
@@ -150,14 +158,15 @@ function parseParagraphs(section: Record<string, Json | undefined>): DigestBrief
     const supportValue = paragraph.support && typeof paragraph.support === "object" && !Array.isArray(paragraph.support)
       ? paragraph.support as Record<string, Json | undefined>
       : {};
+    const sourceNames = Array.isArray(supportValue.sourceNames)
+      ? supportValue.sourceNames.filter((name): name is string => typeof name === "string" && Boolean(name.trim()))
+      : references.map(r => r.source);
+    const sourceCount = Math.max(1, new Set(sourceNames.map(name => name.trim().toLowerCase())).size);
     const support: DigestBriefSupport = {
-      fullTextSourceCount: typeof supportValue.fullTextSourceCount === "number" ? Math.max(0, supportValue.fullTextSourceCount) : 0,
-      independentSourceCount: typeof supportValue.independentSourceCount === "number"
-        ? Math.max(1, supportValue.independentSourceCount)
-        : Math.max(1, references.length),
-      status: supportValue.status === "full_text" || supportValue.status === "corroborated_summary" || supportValue.status === "limited"
-        ? supportValue.status
-        : references.length >= 2 ? "corroborated_summary" : "limited",
+      sourceNames,
+      fullTextSourceCount: supportValue.status === "full_text" ? 1 : 0,
+      independentSourceCount: sourceCount,
+      status: supportValue.status === "full_text" ? "full_text" : sourceCount > 1 ? "corroborated_summary" : "limited",
     };
 
     return text ? [{ references, support, text }] : [];
@@ -193,77 +202,24 @@ function parseWatchlist(value: Json): DigestBriefWatchItem[] {
   });
 }
 
-function fallbackSectionTitle(category: string) {
-  const labels: Record<string, string> = {
-    ai: "AI",
-    business: "Biznes i gospodarka",
-    geopolitics: "Geopolityka",
-    security: "Cyberbezpieczeństwo",
-    software: "Technologia i software",
-  };
-
-  return labels[category.toLowerCase()] || category;
-}
-
-function compactToWordLimit(value: string, maxWords: number) {
-  const words = value.split(/\s+/).filter(Boolean);
-
-  return words.length > maxWords ? `${words.slice(0, maxWords).join(" ").replace(/[.,;:!?-]+$/, "")}…` : value;
-}
-
-function fallbackWhyItMatters(article: DigestBriefFallbackArticle) {
-  return compactToWordLimit(article.preview?.whyItMatters || article.whyInteresting || article.summary, 30);
-}
-
 export function fallbackDigestBriefFromNews(items: DigestBriefFallbackArticle[]): DigestBrief | null {
-  const digestDate = items.reduce<string | null>(
-    (latestDate, item) => (!latestDate || item.digestDate > latestDate ? item.digestDate : latestDate),
-    null,
-  );
-
-  if (!digestDate) {
-    return null;
-  }
-
-  const latestItems = items.filter((item) => item.digestDate === digestDate);
-  const highlights = latestItems.slice(0, 5).map((item) => ({
-    newsItemId: item.id,
-    source: item.source,
-    sourceUrl: item.sourceUrl ?? null,
-    supportsSummary: true,
-    title: item.title,
-    whatHappened: compactToWordLimit(item.summary, 25),
-    whyItMatters: fallbackWhyItMatters(item),
+  const digestDate = items.map(item => item.digestDate).sort().at(-1);
+  if (!digestDate) return null;
+  const articles = items.filter(item => item.digestDate === digestDate).map((item, index) => ({
+    ...item, index, newsItemId: item.id, storyClusterId: item.storyClusterId || item.id,
+    importanceScore: 0, publishedAt: null, sourceCount: 1, evidence: {},
+    whyInteresting: item.preview?.whyItMatters || item.whyInteresting,
   }));
-  const sections = Array.from(new Set(latestItems.map((item) => item.category))).slice(0, 5).map((category) => {
-    const categoryItems = latestItems.filter((item) => item.category === category).slice(0, 6);
-    const references = categoryItems.map((item) => ({ newsItemId: item.id, source: item.source, sourceUrl: item.sourceUrl ?? null, title: item.title }));
-
-    return {
-      category,
-      paragraphs: [{
-        references,
-        text: compactToWordLimit(categoryItems.map((item) => item.summary).join(" "), 65),
-      }],
-      title: fallbackSectionTitle(category),
-    };
+  const result = materializeBrief(fallbackDigestBrief(articles), {
+    articles, interestProfile: { feedTargets: {}, preferredKeywords: [] },
+    omitted: { insufficientEvidence: 0, overLimit: 0 }, promptVersion: DIGEST_BRIEF_PROMPT_VERSION, version: 1,
   });
-  const subject = latestItems.length === 1 ? "jedną wiadomość" : "wybrane wiadomości";
-
-  return {
-    coverageNote: "Widok awaryjny bez syntezy AI — pełny kontekst znajduje się w materiałach źródłowych.",
-    digestDate,
-    highlights,
-    readingTimeMinutes: readingTimeMinutesForDigestBrief({
-      coverageNote: "Widok awaryjny bez syntezy AI — pełny kontekst znajduje się w materiałach źródłowych.",
-      sections,
-      summary: `Najnowszy digest obejmuje ${subject}. Poniżej znajdziesz przekrojowy obraz sytuacji w dostępnych materiałach.`,
-      watchlist: [],
-    }),
-    sections,
-    summary: `Najnowszy digest obejmuje ${subject}. Poniżej znajdziesz przekrojowy obraz sytuacji w dostępnych materiałach.`,
-    summaryReferences: highlights.map(({ newsItemId, source, sourceUrl, title, whatHappened }) => ({ newsItemId, source, sourceUrl, title, whatHappened })),
-    watchlist: [],
+  const urls = new Map(items.map(item => [item.id, item.sourceUrl ?? null]));
+  const link = <T extends { newsItemId: string }>(ref: T) => ({ ...ref, sourceUrl: urls.get(ref.newsItemId) ?? null });
+  return { ...result, digestDate, generationKind: "fallback", generationReason: "missing_brief",
+    highlights: result.highlights.map(link),
+    sections: result.sections.map(section => ({ ...section, paragraphs: section.paragraphs.map(p => ({ ...p, references: p.references.map(link) })) })),
+    watchlist: [], summaryReferences: result.highlights.map(({ newsItemId, source, title, whatHappened }) => link({ newsItemId, source, title, whatHappened })),
   };
 }
 
@@ -271,7 +227,7 @@ export async function getLatestDigestBrief(): Promise<DigestBrief | null> {
   const supabase = createSupabaseAdminClient();
   const { data, error } = await supabase
     .from("digest_summaries")
-    .select("coverage_note, digest_date, highlights, reading_time_minutes, sections, summary, watchlist")
+    .select("generation_kind, generation_reason, created_at, digest_run_id, coverage_note, digest_date, highlights, reading_time_minutes, sections, summary, watchlist")
     .order("digest_date", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(1)
@@ -335,6 +291,10 @@ export async function getLatestDigestBrief(): Promise<DigestBrief | null> {
   return {
     coverageNote,
     digestDate: data.digest_date,
+    generationKind: data.generation_kind,
+    generationReason: data.generation_reason,
+    createdAt: data.created_at,
+    digestRunId: data.digest_run_id,
     highlights: linkedHighlights,
     readingTimeMinutes: readingTimeMinutesForDigestBrief({ coverageNote, sections: linkedSections, summary, watchlist: linkedWatchlist }),
     sections: linkedSections,
