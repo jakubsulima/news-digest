@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 
 import type { Json } from "./database.types";
 import { readingTimeMinutesForDigestBrief } from "./digest-brief-text";
+import type { DigestBriefSupport } from "./digest-brief";
 import type { DigestBriefArticle, NvidiaDigestBrief } from "./ai-summary";
 
-export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v2";
+export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v3";
 export const MAX_BRIEF_ARTICLES = 10;
 const MAX_INPUT_CHARS = 48_000;
 
@@ -23,6 +24,53 @@ export type BriefInputV1 = {
   version: 1;
 };
 
+function evidenceRecord(value: Json) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, Json | undefined>
+    : {};
+}
+
+function evidenceStatus(value: Json) {
+  const status = evidenceRecord(value).status;
+  return status === "full_text" || status === "corroborated_summary" || status === "limited"
+    ? status
+    : null;
+}
+
+function paragraphSupport(input: BriefInputV1, articleIndexes: number[]): DigestBriefSupport {
+  const evidence = articleIndexes.flatMap((index) => {
+    const article = input.articles[index];
+    if (!article) return [];
+    const details = evidenceRecord(article.evidence);
+    const status = evidenceStatus(article.evidence);
+    const reportedFullTextSourceCount = typeof details.fullTextSourceCount === "number"
+      ? Math.max(0, details.fullTextSourceCount)
+      : 0;
+    const reportedIndependentSourceCount = typeof details.independentSourceCount === "number"
+      ? Math.max(1, details.independentSourceCount)
+      : Math.max(1, article.sourceCount);
+    return [{
+      fullTextSourceCount: status === "full_text" ? Math.max(1, reportedFullTextSourceCount) : reportedFullTextSourceCount,
+      independentSourceCount: status === "corroborated_summary"
+        ? Math.max(2, reportedIndependentSourceCount)
+        : reportedIndependentSourceCount,
+      status,
+    }];
+  });
+  const fullTextSourceCount = evidence.reduce((total, item) => total + item.fullTextSourceCount, 0);
+  const independentSourceCount = Math.max(1, evidence.reduce((total, item) => total + item.independentSourceCount, 0));
+
+  return {
+    fullTextSourceCount,
+    independentSourceCount,
+    status: fullTextSourceCount > 0 || evidence.some((item) => item.status === "full_text")
+      ? "full_text"
+      : independentSourceCount > 1 || evidence.some((item) => item.status === "corroborated_summary")
+        ? "corroborated_summary"
+        : "limited",
+  };
+}
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -33,9 +81,7 @@ function canonical(value: unknown): string {
 
 export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "version">) {
   const eligible = input.articles.filter((article) => {
-    const evidence = article.evidence && typeof article.evidence === "object" && !Array.isArray(article.evidence)
-      ? article.evidence as Record<string, Json | undefined> : {};
-    return evidence.status !== "limited";
+    return evidenceStatus(article.evidence) === "full_text" || evidenceStatus(article.evidence) === "corroborated_summary";
   });
   const selected = eligible.slice(0, MAX_BRIEF_ARTICLES).map((article, index) => ({
     ...article,
@@ -76,7 +122,11 @@ export function materializeBrief(brief: NvidiaDigestBrief, input: BriefInputV1) 
       const references = [...new Set(paragraph.articleIndexes)].flatMap((index) => {
         const linked = reference(index); return linked ? [linked] : [];
       });
-      return references.length ? [{ text: paragraph.text, references }] : [];
+      return references.length ? [{
+        text: paragraph.text,
+        references,
+        support: paragraphSupport(input, paragraph.articleIndexes),
+      }] : [];
     });
     return paragraphs.length ? [{ category: section.category, paragraphs, title: section.title }] : [];
   });
@@ -85,7 +135,15 @@ export function materializeBrief(brief: NvidiaDigestBrief, input: BriefInputV1) 
     signal: item.signal,
     why: item.why,
   }));
-  const coverageNote = `${brief.coverageNote}${input.omitted.insufficientEvidence ? ` ${input.omitted.insufficientEvidence} materiałów o ograniczonym pokryciu pominięto w syntezie.` : ""}`;
+  const coverageNote = [
+    brief.coverageNote,
+    input.omitted.insufficientEvidence
+      ? `${input.omitted.insufficientEvidence} materiałów o ograniczonym pokryciu pominięto w syntezie.`
+      : null,
+    input.omitted.overLimit
+      ? `${input.omitted.overLimit} dalszych materiałów nie weszło do ograniczonego wejścia briefingu.`
+      : null,
+  ].filter(Boolean).join(" ");
   return {
     coverageNote,
     highlights,
