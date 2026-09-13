@@ -13,6 +13,7 @@ type NewsNoteActionProps = {
   buttonClassName?: string;
   buttonSize?: "sm" | "icon-sm" | "icon-lg";
   initialCount?: number;
+  count?: number;
   initialKind?: ReaderNoteKind;
   itemId: string;
   onCreated?: () => void;
@@ -23,6 +24,7 @@ export function NewsNoteAction({
   buttonClassName,
   buttonSize = "icon-lg",
   initialCount = 0,
+  count: controlledCount,
   initialKind = "thought",
   itemId,
   onCreated,
@@ -30,7 +32,8 @@ export function NewsNoteAction({
 }: NewsNoteActionProps) {
   const l = useLocalize();
   const [open, setOpen] = useState(false);
-  const [count, setCount] = useState(initialCount);
+  const [localCount, setCount] = useState(initialCount);
+  const count = controlledCount ?? localCount;
 
   return (
     <>

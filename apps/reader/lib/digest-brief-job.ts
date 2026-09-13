@@ -5,7 +5,7 @@ import { readingTimeMinutesForDigestBrief } from "./digest-brief-text";
 import type { DigestBriefSupport } from "./digest-brief";
 import type { DigestBriefArticle, NvidiaDigestBrief } from "./ai-summary";
 
-export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v3";
+export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v4";
 export const MAX_BRIEF_ARTICLES = 10;
 const MAX_INPUT_CHARS = 48_000;
 
@@ -20,6 +20,7 @@ export type BriefInputV1 = {
   articles: FrozenBriefArticle[];
   interestProfile: { feedTargets: Record<string, number>; preferredKeywords: string[] };
   omitted: { insufficientEvidence: number; overLimit: number };
+  selectionDecisions?: Array<{ storyClusterId: string; reason: string }>;
   promptVersion: typeof DIGEST_BRIEF_PROMPT_VERSION;
   version: 1;
 };
@@ -38,37 +39,17 @@ function evidenceStatus(value: Json) {
 }
 
 function paragraphSupport(input: BriefInputV1, articleIndexes: number[]): DigestBriefSupport {
-  const evidence = articleIndexes.flatMap((index) => {
-    const article = input.articles[index];
-    if (!article) return [];
-    const details = evidenceRecord(article.evidence);
-    const status = evidenceStatus(article.evidence);
-    const reportedFullTextSourceCount = typeof details.fullTextSourceCount === "number"
-      ? Math.max(0, details.fullTextSourceCount)
-      : 0;
-    const reportedIndependentSourceCount = typeof details.independentSourceCount === "number"
-      ? Math.max(1, details.independentSourceCount)
-      : Math.max(1, article.sourceCount);
-    return [{
-      fullTextSourceCount: status === "full_text" ? Math.max(1, reportedFullTextSourceCount) : reportedFullTextSourceCount,
-      independentSourceCount: status === "corroborated_summary"
-        ? Math.max(2, reportedIndependentSourceCount)
-        : reportedIndependentSourceCount,
-      status,
-    }];
-  });
-  const fullTextSourceCount = evidence.reduce((total, item) => total + item.fullTextSourceCount, 0);
-  const independentSourceCount = Math.max(1, evidence.reduce((total, item) => total + item.independentSourceCount, 0));
+  const articles = [...new Set(articleIndexes)].flatMap(index => input.articles[index] ? [input.articles[index]] : []);
+  const names = new Set(articles.flatMap(article => {
+    const value = evidenceRecord(article.evidence).sourceNames;
+    return Array.isArray(value) ? value.filter((name): name is string => typeof name === "string").map(name => name.trim().toLowerCase()).filter(Boolean) : [article.source.trim().toLowerCase()];
+  }));
+  // Full-text publisher identities are unavailable: report a conservative lower bound.
+  const fullTextSourceCount = articles.some(article => evidenceStatus(article.evidence) === "full_text") ? 1 : 0;
+  const independentSourceCount = Math.max(1, names.size);
+  return { fullTextSourceCount, independentSourceCount, sourceNames: [...names],
+    status: fullTextSourceCount ? "full_text" : independentSourceCount > 1 ? "corroborated_summary" : "limited" };
 
-  return {
-    fullTextSourceCount,
-    independentSourceCount,
-    status: fullTextSourceCount > 0 || evidence.some((item) => item.status === "full_text")
-      ? "full_text"
-      : independentSourceCount > 1 || evidence.some((item) => item.status === "corroborated_summary")
-        ? "corroborated_summary"
-        : "limited",
-  };
 }
 
 function canonical(value: unknown): string {
@@ -83,7 +64,23 @@ export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "ver
   const eligible = input.articles.filter((article) => {
     return evidenceStatus(article.evidence) === "full_text" || evidenceStatus(article.evidence) === "corroborated_summary";
   });
-  const selected = eligible.slice(0, MAX_BRIEF_ARTICLES).map((article, index) => ({
+  const newest = Math.max(0, ...eligible.map(a => Date.parse(a.publishedAt || "") || 0));
+  const score = (a: FrozenBriefArticle) => a.importanceScore
+    + Math.max(0, 5 - (newest - (Date.parse(a.publishedAt || "") || 0)) / 86_400_000)
+    + Math.min(3, input.interestProfile.feedTargets[a.category] || 0)
+    + Math.min(4, input.interestProfile.preferredKeywords.filter(k => `${a.title} ${a.summary}`.toLowerCase().includes(k.toLowerCase())).length)
+    + (evidenceStatus(a.evidence) === "full_text" ? 2 : 1);
+  const remaining = [...eligible].sort((a,b) => b.importanceScore - a.importanceScore || score(b)-score(a) || a.storyClusterId.localeCompare(b.storyClusterId) || a.newsItemId.localeCompare(b.newsItemId));
+  const ranked: FrozenBriefArticle[] = [];
+  const categories = new Map<string, number>();
+  while (remaining.length) {
+    if (ranked.length) remaining.sort((a,b) => (score(b) - 3 * (categories.get(b.category) || 0)) - (score(a) - 3 * (categories.get(a.category) || 0)) || a.storyClusterId.localeCompare(b.storyClusterId) || a.newsItemId.localeCompare(b.newsItemId));
+    const next = remaining.shift()!;
+    if (ranked.some(a => a.storyClusterId === next.storyClusterId)) continue;
+    ranked.push(next);
+    categories.set(next.category, (categories.get(next.category) || 0) + 1);
+  }
+  const selected = ranked.slice(0, MAX_BRIEF_ARTICLES).map((article, index) => ({
     ...article,
     index,
     summary: article.summary.slice(0, 2_500),
@@ -92,13 +89,16 @@ export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "ver
   }));
   const payload: BriefInputV1 = {
     articles: selected,
+    selectionDecisions: input.articles.map(a => ({ storyClusterId: a.storyClusterId,
+      reason: !eligible.includes(a) ? "insufficient_evidence" : selected.some(s => s.newsItemId === a.newsItemId) ? "selected" : ranked.some(s => s.newsItemId === a.newsItemId) ? "over_limit" : "duplicate_story",
+    })).sort((a,b) => a.storyClusterId.localeCompare(b.storyClusterId) || a.reason.localeCompare(b.reason)),
     interestProfile: {
       feedTargets: input.interestProfile.feedTargets,
       preferredKeywords: input.interestProfile.preferredKeywords.slice(0, 50).map((value) => value.slice(0, 100)),
     },
     omitted: {
       insufficientEvidence: input.articles.length - eligible.length,
-      overLimit: Math.max(0, eligible.length - MAX_BRIEF_ARTICLES),
+      overLimit: Math.max(0, ranked.length - MAX_BRIEF_ARTICLES),
     },
     promptVersion: DIGEST_BRIEF_PROMPT_VERSION,
     version: 1,

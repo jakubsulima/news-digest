@@ -2,6 +2,8 @@
 
 import { ArrowRight, Clock3, ExternalLink, ListTree, Newspaper, ShieldCheck } from "lucide-react";
 import Link from "next/link";
+import { createContext, useContext, useState, type ReactNode } from "react";
+import { retryAiDigestBrief } from "@/lib/actions";
 
 import { NewsItemFeedbackActions } from "@/components/news-item-feedback-actions";
 import { NewsNoteAction } from "@/components/news-note-action";
@@ -14,12 +16,31 @@ import { evidenceStatusDescription, evidenceStatusLabel } from "@/lib/evidence";
 
 type DigestBriefProps = {
   brief: DigestBrief;
+  canRetryAi?: boolean;
   interactionsByNewsItemId?: Record<string, {
     feedback: FeedbackSentiment | null;
     feedbackReason: FeedbackReason | null;
     noteCount: number;
   }>;
 };
+
+type Interactions = Record<string, NonNullable<DigestBriefProps["interactionsByNewsItemId"]>[string] & { busy?: boolean }>;
+const SourceActionsContext = createContext<{ values: Interactions; update: (id: string, patch: Partial<Interactions[string]>) => void }>({ values: {}, update: () => {} });
+
+function SourceActions({ itemId }: { itemId: string }) {
+  const { values, update } = useContext(SourceActionsContext);
+  const value = values[itemId];
+  const l = useLocalize();
+  return <div className="flex shrink-0 gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100" aria-label={l("Akcje źródła", "Source actions")}>
+    <NewsNoteAction itemId={itemId} count={value?.noteCount ?? 0} onCreated={() => update(itemId, { noteCount: (value?.noteCount ?? 0) + 1 })} buttonClassName="size-11" />
+    <NewsItemFeedbackActions busy={value?.busy} onPendingChange={busy => update(itemId, { busy })} itemId={itemId} feedback={value?.feedback ?? null} feedbackReason={value?.feedbackReason ?? null} onFeedbackChange={(feedback, feedbackReason) => update(itemId, { feedback, feedbackReason })} likeOnly buttonClassName="size-11" />
+  </div>;
+}
+
+function SourceActionsProvider({ initial, children }: { initial: Interactions; children: ReactNode }) {
+  const [values, setValues] = useState(initial);
+  return <SourceActionsContext.Provider value={{ values, update: (id, patch) => setValues(previous => ({ ...previous, [id]: { ...(previous[id] ?? { feedback: null, feedbackReason: null, noteCount: 0 }), ...patch } })) }}>{children}</SourceActionsContext.Provider>;
+}
 
 const TECHNICAL_REASON_COPY: Record<string, readonly [string, string]> = {
   "build opportunity": ["Może tworzyć konkretną okazję produktową, integracyjną albo automatyzacyjną.", "It may create a concrete product, integration, or automation opportunity."],
@@ -79,12 +100,13 @@ function BriefHighlights({ highlights }: { highlights: DigestBrief["highlights"]
   );
 }
 
-export function DigestBriefCard({ brief, interactionsByNewsItemId = {} }: DigestBriefProps) {
+export function DigestBriefCard({ brief, canRetryAi = false, interactionsByNewsItemId = {} }: DigestBriefProps) {
   const l = useLocalize();
   const summaryNewsItemIds = new Set(brief.summaryReferences.map((reference) => reference.newsItemId));
   const additionalHighlights = brief.highlights.filter((highlight) => !summaryNewsItemIds.has(highlight.newsItemId));
 
   return (
+    <SourceActionsProvider key={brief.createdAt ?? brief.digestDate} initial={interactionsByNewsItemId}>
     <section className="-mx-4 overflow-hidden bg-background md:mx-0 md:rounded-2xl md:border md:bg-card md:shadow-sm" aria-label={l("Podsumowanie dnia", "Daily summary")}>
       <div className="border-b px-4 py-5 md:px-7 md:py-7">
         <div className="flex items-center gap-3">
@@ -100,12 +122,18 @@ export function DigestBriefCard({ brief, interactionsByNewsItemId = {} }: Digest
           </span>
         </div>
 
+        {brief.generationKind === "fallback" ? <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+          <p>{l("Wersja awaryjna bez AI. Każda historia jest przedstawiona osobno.", "Fallback without AI. Each story is presented separately.")}</p>
+          {brief.digestRunId && canRetryAi ? <form action={retryAiDigestBrief.bind(null, brief.digestRunId)}><button className={buttonVariants({ variant: "outline", size: "sm" })} type="submit">{l("Ponów AI", "Retry AI")}</button></form> : null}
+        </div> : null}
+        <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">{l("Szczegóły briefingu", "Briefing details")}</summary>
+          <p>{brief.generationKind ?? "legacy"}{brief.createdAt ? ` · ${brief.createdAt}` : ""}{brief.generationReason ? ` · ${brief.generationReason}` : ""}</p>
+        </details>
         <p className="mt-5 max-w-3xl text-base leading-7 text-foreground/90 md:mt-6 md:text-[1.05rem] md:leading-8">
           {brief.summary}
         </p>
         <SummaryReferenceLinks
           highlights={brief.highlights}
-          interactionsByNewsItemId={interactionsByNewsItemId}
           references={brief.summaryReferences}
         />
       </div>
@@ -124,8 +152,8 @@ export function DigestBriefCard({ brief, interactionsByNewsItemId = {} }: Digest
                     <p className="break-words [overflow-wrap:anywhere]">{paragraph.text}</p>
                     <EvidenceSupport support={paragraph.support ?? {
                       fullTextSourceCount: 0,
-                      independentSourceCount: Math.max(1, paragraph.references.length),
-                      status: paragraph.references.length > 1 ? "corroborated_summary" : "limited",
+                      independentSourceCount: Math.max(1, new Set(paragraph.references.map(r => r.source.trim().toLowerCase())).size),
+                      status: new Set(paragraph.references.map(r => r.source.trim().toLowerCase())).size > 1 ? "corroborated_summary" : "limited",
                     }} />
                     <ReferenceLinks references={paragraph.references} />
                   </div>
@@ -176,6 +204,7 @@ export function DigestBriefCard({ brief, interactionsByNewsItemId = {} }: Digest
         ) : null}
       </div>
     </section>
+    </SourceActionsProvider>
   );
 }
 
@@ -201,11 +230,9 @@ function EvidenceSupport({ support }: { support: DigestBriefSupport }) {
 
 function SummaryReferenceLinks({
   highlights,
-  interactionsByNewsItemId,
   references,
 }: {
   highlights: DigestBrief["highlights"];
-  interactionsByNewsItemId: NonNullable<DigestBriefProps["interactionsByNewsItemId"]>;
   references: DigestBrief["summaryReferences"];
 }) {
   const l = useLocalize();
@@ -218,11 +245,10 @@ function SummaryReferenceLinks({
       <p className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-foreground/60">{l("Najważniejsze dzisiaj", "Today's highlights")}</p>
       <ul className="grid gap-2 sm:grid-cols-2">
         {references.map((reference) => {
-          const interactions = interactionsByNewsItemId[reference.newsItemId];
           const highlight = highlightsByNewsItemId.get(reference.newsItemId);
 
           return (
-            <li key={reference.newsItemId} className="grid overflow-hidden rounded-lg border border-border/80 bg-background transition-colors hover:border-primary/40">
+            <li key={reference.newsItemId} className="group grid overflow-hidden rounded-lg border border-border/80 bg-background transition-colors hover:border-primary/40">
               <div className="flex min-w-0 items-start gap-2 px-3 py-2 text-xs leading-5">
                 <Newspaper className="mt-0.5 size-3.5 shrink-0 text-primary" aria-hidden="true" />
                 <span className="min-w-0">
@@ -251,22 +277,7 @@ function SummaryReferenceLinks({
                   <ExternalLink aria-hidden="true" />
                   {reference.sourceUrl ? l("Czytaj źródło", "Read source") : l("Szczegóły newsa", "Story details")}
                 </a>
-                <div className="flex shrink-0 items-center gap-1" aria-label={l("Akcje źródła", "Source actions")}>
-                  <NewsNoteAction
-                    buttonClassName="border-transparent bg-muted/55 hover:bg-muted focus-visible:border-transparent"
-                    buttonSize="icon-sm"
-                    initialCount={interactions?.noteCount ?? 0}
-                    itemId={reference.newsItemId}
-                  />
-                  <NewsItemFeedbackActions
-                    buttonClassName="border-transparent bg-muted/55 hover:bg-muted focus-visible:border-transparent"
-                    buttonSize="icon-sm"
-                    feedback={interactions?.feedback ?? null}
-                    feedbackReason={interactions?.feedbackReason ?? null}
-                    itemId={reference.newsItemId}
-                    likeOnly
-                  />
-                </div>
+                <SourceActions itemId={reference.newsItemId} />
               </div>
             </li>
           );
@@ -291,6 +302,7 @@ function ReferenceLinks({
     <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs leading-5 text-muted-foreground" aria-label={label ?? l("Źródła akapitu", "Paragraph sources")}>
       <span className="font-semibold text-foreground/60">{l("Źródła:", "Sources:")}</span>
       {references.map((reference) => (
+        <span key={reference.newsItemId} className="group inline-flex items-center gap-1">
         <a
           key={reference.newsItemId}
           href={reference.sourceUrl ?? `/news/${reference.newsItemId}`}
@@ -302,6 +314,8 @@ function ReferenceLinks({
           <span className="max-w-[15rem] truncate">{reference.source}</span>
           <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
         </a>
+        <SourceActions itemId={reference.newsItemId} />
+        </span>
       ))}
     </div>
   );

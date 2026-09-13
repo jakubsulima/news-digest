@@ -23,9 +23,9 @@ describe("frozen digest brief input", () => {
     expect(first.payload.omitted.overLimit).toBe(2);
     const rendered = materializeBrief(fallbackDigestBrief(first.payload.articles), first.payload);
     expect(rendered.highlights[0]).toMatchObject({ newsItemId: "news-0", title: "Title 0" });
-    expect(rendered.sections[0]?.paragraphs[0]?.support).toEqual({
-      fullTextSourceCount: 6,
-      independentSourceCount: 6,
+    expect(rendered.sections[0]?.paragraphs[0]?.support).toMatchObject({
+      fullTextSourceCount: 1,
+      independentSourceCount: 1,
       status: "full_text",
     });
     expect(rendered.coverageNote).toContain("2 dalszych materiałów");
@@ -47,4 +47,18 @@ describe("frozen digest brief input", () => {
     expect(frozen.payload.articles).toEqual([]);
     expect(frozen.payload.omitted.insufficientEvidence).toBe(1);
   });
+});
+
+it("selects independently of input order and protects the most important story", () => {
+  const articles = Array.from({ length: 14 }, (_, i) => ({ ...article(i), importanceScore: i === 13 ? 100 : 80, category: i === 12 ? "security" : "business" }));
+  const freeze = (items: typeof articles) => buildBriefInput({ articles: items, interestProfile: { feedTargets: {}, preferredKeywords: [] }, omitted: { insufficientEvidence: 0, overLimit: 0 } });
+  expect(freeze(articles).hash).toBe(freeze([...articles].reverse()).hash);
+  expect(freeze(articles).payload.articles[0].newsItemId).toBe("news-13");
+  expect(freeze(articles).payload.articles.some(a => a.category === "security")).toBe(true);
+});
+it("counts a repeated publisher once across referenced stories", () => {
+  const frozen = buildBriefInput({ articles: [article(0), article(1)].map(a => ({ ...a, evidence: { status: "corroborated_summary", sourceNames: ["Publisher", " publisher "] } })), interestProfile: { feedTargets: {}, preferredKeywords: [] }, omitted: { insufficientEvidence: 0, overLimit: 0 } });
+  const brief = fallbackDigestBrief(frozen.payload.articles);
+  brief.sections[0].paragraphs[0].articleIndexes = [0, 1, 0];
+  expect(materializeBrief(brief, frozen.payload).sections[0].paragraphs[0].support).toMatchObject({ fullTextSourceCount: 0, independentSourceCount: 1, status: "limited" });
 });

@@ -20,6 +20,10 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
     return { aiBrief: { brief: fallback, kind: "fallback", reason: job.reason || "skipped" } };
   }
   if (job.candidate_payload) {
+    const report = job.validation_report;
+    if (!report || typeof report !== "object" || Array.isArray(report) || report.valid !== true) {
+      return { aiBrief: { brief: fallback, kind: "fallback", reason: "unvalidated_candidate" } };
+    }
     return { aiBrief: { brief: job.candidate_payload, kind: "ai", reason: null } };
   }
   const remainingMs = deadlineMs - Date.now() - 20_000;
@@ -29,9 +33,13 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
   const started = await rpc("start_digest_brief_attempt", { p_run_id: digestRunId, p_lease_token: leaseToken });
   if (started.error || !started.data) throw started.error || new Error("AI job could not start.");
   const attempt = started.data.generation_attempt_count;
-  const generation = await generateDigestBriefWithNvidia({ articles: input.articles, attempt, interestProfile: input.interestProfile, timeoutMs: Math.min(60_000, remainingMs) });
+  const generation = await generateDigestBriefWithNvidia({ articles: input.articles, attempt, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, interestProfile: input.interestProfile, timeoutMs: Math.min(60_000, remainingMs) });
 
-  if (generation.status === "generated") {
+  const report = generation.validationReport ?? { valid: false, hardErrors: [generation.errorCode || "generation_failed"], warnings: [] };
+  const savedReport = await rpc("save_digest_brief_validation", { p_run_id: digestRunId, p_lease_token: leaseToken,
+    p_attempt: attempt, p_report: { ...report, attempt, validatedAt: new Date().toISOString() } });
+  if (savedReport.error || !savedReport.data) throw savedReport.error || new Error("Validation report could not be saved.");
+  if (generation.status === "generated" && report.valid) {
     const candidate = materializeBrief(generation.brief, input);
     const saved = await rpc("save_digest_brief_candidate", { p_candidate: candidate, p_lease_token: leaseToken, p_model: generation.model, p_run_id: digestRunId });
     if (saved.error || !saved.data) throw saved.error || new Error("AI candidate lease was lost.");

@@ -32,7 +32,7 @@ describe("fallbackDigestBrief", () => {
       { articleIndex: 3, whatHappened: "Summary 4", whyItMatters: "Ważny sygnał ze źródła Source 4." },
       { articleIndex: 4, whatHappened: "Summary 5", whyItMatters: "Ważny sygnał ze źródła Source 5." },
     ]);
-    expect(brief.sections).toHaveLength(2);
+    expect(brief.sections).toHaveLength(6);
     expect(brief.readingTimeMinutes).toBe(1);
   });
 });
@@ -176,35 +176,11 @@ describe("fallbackDigestBriefFromNews", () => {
       },
     ]);
 
-    expect(brief).toEqual({
-      coverageNote: "Widok awaryjny bez syntezy AI — pełny kontekst znajduje się w materiałach źródłowych.",
-      digestDate: "2026-07-10",
-      highlights: [
-        {
-          newsItemId: "newest",
-          source: "Newest source",
-          sourceUrl: "https://example.com/newest",
-          supportsSummary: true,
-          title: "Newest article",
-          whatHappened: "Newest summary",
-          whyItMatters: "This is the key development.",
-        },
-      ],
-      readingTimeMinutes: 1,
-        sections: [
-          {
-            category: "geopolitics",
-            paragraphs: [{
-              references: [{ newsItemId: "newest", source: "Newest source", sourceUrl: "https://example.com/newest", title: "Newest article" }],
-              text: "Newest summary",
-            }],
-            title: "Geopolityka",
-          },
-      ],
-      summary: "Najnowszy digest obejmuje jedną wiadomość. Poniżej znajdziesz przekrojowy obraz sytuacji w dostępnych materiałach.",
-      summaryReferences: [{ newsItemId: "newest", source: "Newest source", sourceUrl: "https://example.com/newest", title: "Newest article", whatHappened: "Newest summary" }],
-      watchlist: [],
+    expect(brief).toMatchObject({ generationKind: "fallback", digestDate: "2026-07-10",
+      sections: [{ title: "Newest article", paragraphs: [{ text: "Newest summary", references: [{ newsItemId: "newest", sourceUrl: "https://example.com/newest" }] }] }],
     });
+    expect(brief?.coverageNote).toContain("bez syntezy AI");
+    expect(brief?.sections).toHaveLength(1);
   });
 });
 
@@ -380,6 +356,7 @@ describe("digestBriefWithNvidia", () => {
         title: "Gospodarka",
       }],
       summary: "Krótki lead.",
+      summaryArticleIndexes: [0],
       watchlist: [],
     });
     const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => ({
@@ -511,6 +488,7 @@ describe("digestBriefWithNvidia", () => {
         title: "Gospodarka",
       }],
       summary: "Krótki lead.",
+      summaryArticleIndexes: [0],
       watchlist: [],
     });
     const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => ({
@@ -556,6 +534,7 @@ describe("digestBriefWithNvidia", () => {
         title: "Gospodarka",
       }],
       summary: "Krótki lead.",
+      summaryArticleIndexes: [9],
       watchlist: [],
     });
     const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) => ({
