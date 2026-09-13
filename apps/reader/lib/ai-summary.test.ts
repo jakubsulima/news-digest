@@ -230,7 +230,7 @@ describe("validateDigestBriefQuality", () => {
     expect(quality.warnings.length).toBeGreaterThan(0);
   });
 
-  it("accepts a focused 350-550 word briefing", () => {
+  it("accepts a focused 280-500 word briefing", () => {
     const words = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `${prefix}${index + 1}`).join(" ");
     const brief = parseDigestBriefJson(JSON.stringify({
       coverageNote: words("ograniczenie", 12),
@@ -269,7 +269,7 @@ describe("validateDigestBriefQuality", () => {
     );
   });
 
-  it("rejects reader-facing content written predominantly in English", () => {
+  it("allows reader-facing content written in English", () => {
     const repeated = (word: string, count: number) => Array.from({ length: count }, () => word).join(" ");
     const brief = parseDigestBriefJson(JSON.stringify({
       coverageNote: repeated("the", 12),
@@ -284,7 +284,50 @@ describe("validateDigestBriefQuality", () => {
     }), 4);
 
     expect(brief).not.toBeNull();
-    expect(validateDigestBriefQuality(brief!).hardErrors).toContain("reader-facing text is predominantly not Polish");
+    expect(validateDigestBriefQuality(brief!).valid).toBe(true);
+  });
+
+  it("rejects a parseable briefing with a critical attribution error", async () => {
+    vi.stubEnv("NVIDIA_API_KEY", "test-key");
+    const responseContent = JSON.stringify({
+      coverageNote: "No material limitations were reported.",
+      highlights: [{ articleIndex: 0, whatHappened: "A company changed its policy.", whyItMatters: "Customers may be affected." }],
+      sections: [
+        { category: "business", title: "Policy change", paragraphs: [{ articleIndexes: [0], text: "The company changed its policy." }] },
+        { category: "technology", title: "Customer impact", paragraphs: [{ articleIndexes: [0], text: "The same change may affect customers." }] },
+      ],
+      summary: "A company changed its policy and customers may be affected.",
+      summaryArticleIndexes: [0],
+      watchlist: [],
+    });
+    const fetchMock = vi.fn(async () => ({
+      json: async () => ({ choices: [{ message: { content: responseContent } }] }),
+      ok: true,
+      status: 200,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateDigestBriefWithNvidia({
+      articles: [{
+        category: "business",
+        evidence: { status: "full_text" },
+        importanceScore: 90,
+        publishedAt: null,
+        source: "Source",
+        sourceCount: 1,
+        summary: "Material",
+        title: "Title",
+        whyInteresting: null,
+      }],
+      attempt: 1,
+      interestProfile: { feedTargets: {}, preferredKeywords: [] },
+    });
+
+    expect(result.status).toBe("retryable_failure");
+    expect(result.brief.coverageNote).toContain("bez syntezy AI");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 });
 
@@ -525,6 +568,7 @@ describe("digestBriefWithNvidia", () => {
     const result = await digestBriefWithNvidia({
       articles: Array.from({ length: 20 }, (_, index) => ({
         category: "business",
+        evidence: { fullTextSourceCount: 1, independentSourceCount: 1, status: "full_text" },
         importanceScore: 90,
         publishedAt: null,
         source: `Source ${index}`,
@@ -537,11 +581,13 @@ describe("digestBriefWithNvidia", () => {
     });
     const firstRequest = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
 
-    expect(firstRequest.messages[1].content).toContain("Techniczny ID źródła (tylko do pól articleIndex/articleIndexes): 9");
-    expect(firstRequest.messages[1].content).not.toContain("Techniczny ID źródła (tylko do pól articleIndex/articleIndexes): 10");
-    expect(firstRequest.messages[1].content).not.toContain("x".repeat(351));
+    expect(firstRequest.messages[1].content).toContain('"articleIndex": 9');
+    expect(firstRequest.messages[1].content).not.toContain('"articleIndex": 10');
+    expect(firstRequest.messages[1].content).not.toContain("x".repeat(801));
+    expect(firstRequest.messages[1].content).toContain('"status": "full_text"');
     expect(firstRequest.max_tokens).toBe(2_400);
     expect(firstRequest.messages[0].content).toContain("Nie podawaj w tekście łącznej liczby newsów");
+    expect(firstRequest.messages[0].content).toContain("Buduj briefing historia po historii");
     expect(result.highlights[0]?.articleIndex).toBe(9);
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();

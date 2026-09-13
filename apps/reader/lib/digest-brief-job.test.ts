@@ -4,7 +4,11 @@ import { fallbackDigestBrief } from "./ai-summary";
 import { buildBriefInput, materializeBrief } from "./digest-brief-job";
 
 const article = (index: number, status: string = "full_text") => ({
-  category: "business", evidence: { status }, importanceScore: 90, index,
+  category: "business", evidence: {
+    fullTextSourceCount: status === "full_text" ? 1 : 0,
+    independentSourceCount: status === "corroborated_summary" ? 2 : 1,
+    status,
+  }, importanceScore: 90, index,
   newsItemId: `news-${index}`, publishedAt: null, source: `Source ${index}`,
   sourceCount: 1, storyClusterId: `cluster-${index}`, summary: `Summary ${index}`,
   title: `Title ${index}`, whyInteresting: null,
@@ -19,10 +23,27 @@ describe("frozen digest brief input", () => {
     expect(first.payload.omitted.overLimit).toBe(2);
     const rendered = materializeBrief(fallbackDigestBrief(first.payload.articles), first.payload);
     expect(rendered.highlights[0]).toMatchObject({ newsItemId: "news-0", title: "Title 0" });
+    expect(rendered.sections[0]?.paragraphs[0]?.support).toEqual({
+      fullTextSourceCount: 6,
+      independentSourceCount: 6,
+      status: "full_text",
+    });
+    expect(rendered.coverageNote).toContain("2 dalszych materiałów");
   });
 
   it("does not admit limited evidence into AI input", () => {
     const frozen = buildBriefInput({ articles: [article(0, "limited")], interestProfile: { feedTargets: {}, preferredKeywords: [] }, omitted: { insufficientEvidence: 0, overLimit: 0 } });
+    expect(frozen.payload.articles).toEqual([]);
+    expect(frozen.payload.omitted.insufficientEvidence).toBe(1);
+  });
+
+  it("does not admit unknown evidence into AI input", () => {
+    const frozen = buildBriefInput({
+      articles: [{ ...article(0), evidence: {} }],
+      interestProfile: { feedTargets: {}, preferredKeywords: [] },
+      omitted: { insufficientEvidence: 0, overLimit: 0 },
+    });
+
     expect(frozen.payload.articles).toEqual([]);
     expect(frozen.payload.omitted.insufficientEvidence).toBe(1);
   });
