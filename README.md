@@ -21,6 +21,8 @@ The active runtime is:
 
 Reader notes keep quoted source context, personal comments, and research status. Notes and their linked Reader Items are retained until the notes are removed.
 
+The hosted database runs `digest-data-maintenance` daily at 03:10 UTC. Its installation SQL is in `infra/supabase/install-digest-maintenance.sql`. Each run deletes at most 5,000 rows per table: temporary stage rows from successful digest runs older than one day (or cancelled runs older than seven days), unsaved and unnoted Reader Items older than 90 days, feed events older than 180 days, and cron logs older than seven days. The digest run, frozen briefing input, saved items, and notes are preserved. PostgreSQL autovacuum makes deleted space reusable; the reported database file size may not shrink immediately.
+
 ## Recommendation And Source Automation
 
 The current implementation includes:
