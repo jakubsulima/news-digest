@@ -272,12 +272,14 @@ export function DigestRunPanel({ initialRun, retrySlot, storyCount }: DigestRunP
             <span className="text-muted-foreground">{digestReady ? l("aktualny", "up to date") : l("gotowy", "ready")}</span>
           </p>
         </div>
-        {retrySlot}
-        <Button type="button" size="lg" className="h-10 px-3.5" onClick={startRun} disabled={isStarting}>
-          {isStarting ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Download aria-hidden="true" />}
-          {l("Pobierz newsy", "Fetch news")}
-        </Button>
-        {clientError ? <p className="w-full text-sm text-destructive">{clientError}</p> : null}
+        <div className="flex flex-wrap items-center justify-end gap-2 [&_button]:h-10 [&_button]:px-3.5">
+          {retrySlot}
+          <Button type="button" size="lg" className="h-10 px-3.5" onClick={startRun} disabled={isStarting}>
+            {isStarting ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Download aria-hidden="true" />}
+            {l("Pobierz newsy", "Fetch news")}
+          </Button>
+        </div>
+        {clientError ? <p className="col-span-full text-sm text-destructive">{clientError}</p> : null}
       </section>
     );
   }
