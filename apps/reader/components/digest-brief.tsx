@@ -145,6 +145,7 @@ export function DigestBriefCard({ brief, canRetryAi = false, interactionsByNewsI
               <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <h2 className="text-lg font-semibold tracking-tight md:text-xl">{section.title}</h2>
                 <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">{section.category}</span>
+                {section.kind === "short" ? <span className="text-xs text-muted-foreground">{l("W skrócie", "In brief")}</span> : null}
               </div>
               <div className="grid gap-4 text-[0.98rem] leading-7 text-foreground/90 md:text-base md:leading-8">
                 {section.paragraphs.map((paragraph, index) => (

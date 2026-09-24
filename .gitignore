@@ -2,6 +2,8 @@
 .DS_Store
 node_modules/
 .next/
+.vercel/
+infra/supabase/.temp/
 apps/*/.next/
 apps/*/node_modules/
 *.tsbuildinfo

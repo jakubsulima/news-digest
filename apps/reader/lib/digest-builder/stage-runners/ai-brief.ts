@@ -1,7 +1,8 @@
 import "server-only";
 
 import { fallbackDigestBrief, generateDigestBriefWithNvidia } from "../../ai-summary";
-import { materializeBrief, type BriefInputV1 } from "../../digest-brief-job";
+import { materializeBrief, type BriefInput } from "../../digest-brief-job";
+import { generateDigestBriefWithLuna } from "../../openai-brief";
 import { createSupabaseAdminClient } from "../../supabase";
 import type { StageRunner } from "../types";
 
@@ -11,7 +12,7 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
   const supabase = createSupabaseAdminClient();
   const { data: job, error } = await supabase.from("digest_brief_jobs").select("*").eq("digest_run_id", digestRunId).single();
   if (error) throw error;
-  const input = job.input_payload as unknown as BriefInputV1;
+  const input = job.input_payload as unknown as BriefInput;
   const leaseToken = stage.lease_token;
   if (!leaseToken) throw new Error("AI stage has no lease token.");
   const fallback = materializeBrief(fallbackDigestBrief(input.articles), input);
@@ -33,23 +34,26 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
   const started = await rpc("start_digest_brief_attempt", { p_run_id: digestRunId, p_lease_token: leaseToken });
   if (started.error || !started.data) throw started.error || new Error("AI job could not start.");
   const attempt = started.data.generation_attempt_count;
-  const generation = await generateDigestBriefWithNvidia({ articles: input.articles, attempt, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, interestProfile: input.interestProfile, timeoutMs: Math.min(60_000, remainingMs) });
+  const generation = input.version === 2 && input.provider === "openai"
+    ? await generateDigestBriefWithLuna({ input, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, timeoutMs: Math.min(60_000, remainingMs) })
+    : await generateDigestBriefWithNvidia({ articles: input.articles, attempt, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, interestProfile: input.interestProfile, timeoutMs: Math.min(60_000, remainingMs) });
 
   const report = generation.validationReport ?? { valid: false, hardErrors: [generation.errorCode || "generation_failed"], warnings: [] };
+  const providerMetrics = "metrics" in generation && generation.metrics ? generation.metrics : {};
   const savedReport = await rpc("save_digest_brief_validation", { p_run_id: digestRunId, p_lease_token: leaseToken,
-    p_attempt: attempt, p_report: { ...report, attempt, validatedAt: new Date().toISOString() } });
+    p_attempt: attempt, p_report: { ...report, attempt, model: generation.model, providerMetrics, validatedAt: new Date().toISOString() } });
   if (savedReport.error || !savedReport.data) throw savedReport.error || new Error("Validation report could not be saved.");
   if (generation.status === "generated" && report.valid) {
     const candidate = materializeBrief(generation.brief, input);
     const saved = await rpc("save_digest_brief_candidate", { p_candidate: candidate, p_lease_token: leaseToken, p_model: generation.model, p_run_id: digestRunId });
     if (saved.error || !saved.data) throw saved.error || new Error("AI candidate lease was lost.");
-    return { aiBrief: { brief: candidate, kind: "ai", reason: null }, metrics: { generationAttempt: attempt, model: generation.model } };
+    return { aiBrief: { brief: candidate, kind: "ai", reason: null }, metrics: { generationAttempt: attempt, model: generation.model, ...providerMetrics } };
   }
 
-  if (generation.status === "configuration_error" || attempt >= MAX_GENERATIONS) {
-    return { aiBrief: { brief: fallback, kind: "fallback", reason: generation.errorCode }, metrics: { generationAttempt: attempt, model: generation.model } };
+  if (generation.status === "configuration_error" || generation.status === "terminal_failure" || attempt >= MAX_GENERATIONS) {
+    return { aiBrief: { brief: fallback, kind: "fallback", reason: generation.errorCode }, metrics: { generationAttempt: attempt, model: generation.model, ...providerMetrics } };
   }
   const delayMs = attempt === 1 ? 30_000 + Math.floor(Math.random() * 10_001) : 120_000 + Math.floor(Math.random() * 30_001);
   await supabase.from("digest_brief_jobs").update({ last_error_code: generation.errorCode, reason: generation.errorCode, status: "retry_wait" }).eq("digest_run_id", digestRunId).eq("status", "generating");
-  return { complete: false, message: `AI briefing retry ${attempt}/${MAX_GENERATIONS} queued.`, nextAttemptAt: new Date(Date.now() + delayMs).toISOString(), metrics: { generationAttempt: attempt, model: generation.model } };
+  return { complete: false, message: `AI briefing retry ${attempt}/${MAX_GENERATIONS} queued.`, nextAttemptAt: new Date(Date.now() + delayMs).toISOString(), metrics: { generationAttempt: attempt, model: generation.model, ...providerMetrics } };
 };

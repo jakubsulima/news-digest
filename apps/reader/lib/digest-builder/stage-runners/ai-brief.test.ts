@@ -4,9 +4,10 @@ import { DIGEST_BRIEF_PROMPT_VERSION } from "../../digest-brief-job";
 import type { PipelineStageRun } from "../types";
 import { runAiBriefStage } from "./ai-brief";
 
-const mocks = vi.hoisted(() => ({ generate: vi.fn(), rpc: vi.fn(), from: vi.fn() }));
+const mocks = vi.hoisted(() => ({ generate: vi.fn(), generateLuna: vi.fn(), rpc: vi.fn(), from: vi.fn() }));
 vi.mock("../../supabase", () => ({ createSupabaseAdminClient: () => ({ from: mocks.from, rpc: mocks.rpc }) }));
 vi.mock("../../ai-summary", async importOriginal => ({ ...await importOriginal<typeof import("../../ai-summary")>(), generateDigestBriefWithNvidia: mocks.generate }));
+vi.mock("../../openai-brief", () => ({ generateDigestBriefWithLuna: mocks.generateLuna }));
 
 const input = { articles: [], interestProfile: { feedTargets: {}, preferredKeywords: [] }, omitted: { insufficientEvidence: 0, overLimit: 0 }, promptVersion: DIGEST_BRIEF_PROMPT_VERSION, version: 1 };
 const previousReport = { valid: false, hardErrors: ["sections.0.paragraphs.0.articleIndexes: out of range"], warnings: [] };
@@ -46,4 +47,15 @@ it("accepts editorial warnings after persisting the report", async () => {
   const result = await runAiBriefStage(context());
   expect(result.aiBrief?.kind).toBe("ai");
   expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["start_digest_brief_attempt", "save_digest_brief_validation", "save_digest_brief_candidate"]);
+});
+
+it("routes a frozen V2 job to Luna and keeps its recorded model", async () => {
+  const query = mocks.from();
+  query.single.mockResolvedValue({ data: { input_payload: { ...input, version: 2, provider: "openai", model: "gpt-6-luna" }, status: "pending", validation_report: null }, error: null });
+  mocks.generateLuna.mockResolvedValue({ brief: fallbackDigestBrief([]), model: "gpt-6-luna", status: "generated", errorCode: null,
+    validationReport: { valid: true, hardErrors: [], warnings: [] }, metrics: { inputTokens: 100, outputTokens: 200 } });
+  const result = await runAiBriefStage(context());
+  expect(mocks.generateLuna).toHaveBeenCalledTimes(1);
+  expect(mocks.generate).not.toHaveBeenCalled();
+  expect(result.metrics).toMatchObject({ model: "gpt-6-luna", inputTokens: 100, outputTokens: 200 });
 });

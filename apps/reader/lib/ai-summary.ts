@@ -59,6 +59,7 @@ export type NvidiaDigestBriefHighlight = {
 
 export type NvidiaDigestBriefSection = {
   category: string;
+  kind?: "full" | "short";
   paragraphs: Array<{
     articleIndexes: number[];
     text: string;
@@ -723,7 +724,7 @@ export type DigestBriefGenerationResult = {
   validationReport?: BriefValidationReport;
   brief: NvidiaDigestBrief;
   model: string;
-  status: "generated" | "retryable_failure" | "configuration_error";
+  status: "generated" | "retryable_failure" | "configuration_error" | "terminal_failure";
   errorCode: string | null;
 };
 
