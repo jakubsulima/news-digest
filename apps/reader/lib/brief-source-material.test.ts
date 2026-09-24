@@ -29,3 +29,20 @@ it("marks summary-only evidence when no readable variant exists", () => {
     new Map([["c", article("c", "Other News", "insufficient_text")]]));
   expect(sources[0]).toMatchObject({ contentMode: "summary", text: "Krótkie streszczenie Acme." });
 });
+
+it("keeps model prices with their paragraph and model name", () => {
+  const original = article("pricing", "Publisher", "readable");
+  original.title = "Claude Opus 5.5, GPT-6 Luna, and model prices";
+  original.enriched_text = [
+    "Claude Opus 5.5 and GPT-6 Luna were released today. " + "Background about the launches. ".repeat(15),
+    "Other model comparisons and reactions. ".repeat(20),
+    "Opus 4.5 and 5 used to cost $5/$25. Opus 5.5 now costs $4/$20 per million tokens.",
+    "More commentary on the market. ".repeat(20),
+    "Anthropic says Haiku 5.5 is coming soon. Haiku 4.5 is $1/$5 while GPT-6 Luna is $0.10/$0.50.",
+  ].join("\n\n");
+  const text = briefSourceMaterials({ canonicalArticleId: "pricing" }, new Map([["pricing", original]]))[0].text;
+  expect(text).toContain("Opus 5.5 now costs $4/$20");
+  expect(text).toContain("Haiku 4.5 is $1/$5");
+  expect(text).not.toContain("Opus 5. 5");
+  expect(text.length).toBeLessThanOrEqual(1_350);
+});
