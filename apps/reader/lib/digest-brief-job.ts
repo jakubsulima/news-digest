@@ -6,7 +6,7 @@ import type { DigestBriefSupport } from "./digest-brief";
 import type { DigestBriefArticle, NvidiaDigestBrief } from "./ai-summary";
 
 export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v4";
-export const LUNA_BRIEF_PROMPT_VERSION = "digest-brief-luna-v1";
+export const LUNA_BRIEF_PROMPT_VERSION = "digest-brief-luna-v3";
 export const MAX_BRIEF_ARTICLES = 10;
 export const MAX_LUNA_BRIEF_ARTICLES = 20;
 const MAX_INPUT_CHARS = 48_000;

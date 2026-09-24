@@ -19,23 +19,26 @@ export function briefArticleIds(metadata: Json) {
 }
 
 function excerpt(value: string, title: string, maxChars: number) {
-  const clean = plainTextFromHtml(value).replace(/\s+/g, " ").trim();
+  const paragraphs = value.replace(/<\/(?:p|div|h[1-6]|li)>/gi, "\n\n")
+    .split(/\n\s*\n/u).map((paragraph) => plainTextFromHtml(paragraph)).filter(Boolean);
+  const clean = paragraphs.join("\n\n");
   if (clean.length <= maxChars) return clean;
   const titleTerms = new Set((title.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || []).slice(0, 8));
-  const sentences = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/gu)?.map((sentence) => sentence.trim()).filter(Boolean) || [clean];
-  const scored = sentences.map((sentence, index) => ({ index, sentence,
+  const blocks = paragraphs.flatMap((paragraph) => paragraph.length <= Math.floor(maxChars / 3) ? [paragraph]
+    : paragraph.split(/(?<=[.!?])\s+(?=[\p{Lu}"“(])/u).filter(Boolean));
+  const scored = blocks.map((block, index) => ({ index, block,
     score: (index === 0 ? 8 : index === 1 ? 4 : 0)
-      + (/[0-9]/u.test(sentence) ? 2 : 0)
-      + [...titleTerms].filter((term) => sentence.toLowerCase().includes(term)).length,
+      + (/[0-9]/u.test(block) ? 2 : 0)
+      + [...titleTerms].filter((term) => block.toLowerCase().includes(term)).length,
   }));
   const picked = new Set<number>();
   let size = 0;
   for (const item of [...scored].sort((a, b) => b.score - a.score || a.index - b.index)) {
-    if (size + item.sentence.length + 1 > maxChars) continue;
+    if (size + item.block.length + 2 > maxChars) continue;
     picked.add(item.index);
-    size += item.sentence.length + 1;
+    size += item.block.length + 2;
   }
-  const selected = scored.filter((item) => picked.has(item.index)).map((item) => item.sentence).join(" ");
+  const selected = scored.filter((item) => picked.has(item.index)).map((item) => item.block).join("\n\n");
   return selected || clean.slice(0, maxChars).replace(/\s+\S*$/, "");
 }
 
