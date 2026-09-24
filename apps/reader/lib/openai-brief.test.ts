@@ -70,6 +70,17 @@ it("rejects a generated section that assigns Haiku's price to Opus", async () =>
   expect(result.validationReport?.hardErrors).toContainEqual(expect.stringContaining("attributes price 1/5 to opus 5.5"));
 });
 
+it("rejects an unsupported quantity before saving the candidate", async () => {
+  const response = rawBrief(20);
+  response.sections[0].text += " Acme podpisała 13 nowych umów.";
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(response) }] }],
+  }) }));
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5_000 });
+  expect(result.status).toBe("retryable_failure");
+  expect(result.validationReport?.hardErrors).toContainEqual(expect.stringContaining("numbers absent from its cited sources: 13"));
+});
+
 it("fails without a key without sending article text", async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
   const fetchMock = vi.fn();
