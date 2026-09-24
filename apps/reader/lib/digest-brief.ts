@@ -38,6 +38,7 @@ export type DigestBriefSupport = {
 
 export type DigestBriefSection = {
   category: string;
+  kind?: "full" | "short";
   paragraphs: Array<{
     references: DigestBriefReference[];
     support?: DigestBriefSupport;
@@ -184,7 +185,7 @@ function parseSections(value: Json): DigestBriefSection[] {
     const paragraphs = parseParagraphs(section);
 
     return category && title && paragraphs.length
-      ? [{ category, paragraphs, title }]
+      ? [{ category, kind: section.kind === "full" || section.kind === "short" ? section.kind : undefined, paragraphs, title }]
       : [];
   });
 }

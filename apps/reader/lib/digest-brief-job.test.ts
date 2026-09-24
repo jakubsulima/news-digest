@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { fallbackDigestBrief } from "./ai-summary";
-import { buildBriefInput, materializeBrief } from "./digest-brief-job";
+import { buildBriefInput, buildBriefInputV2, materializeBrief } from "./digest-brief-job";
 
 const article = (index: number, status: string = "full_text") => ({
   category: "business", evidence: {
@@ -61,4 +61,21 @@ it("counts a repeated publisher once across referenced stories", () => {
   const brief = fallbackDigestBrief(frozen.payload.articles);
   brief.sections[0].paragraphs[0].articleIndexes = [0, 1, 0];
   expect(materializeBrief(brief, frozen.payload).sections[0].paragraphs[0].support).toMatchObject({ fullTextSourceCount: 0, independentSourceCount: 1, status: "limited" });
+});
+
+it("freezes up to 20 Luna stories with source text and a stable hash", () => {
+  const articles = Array.from({ length: 22 }, (_, index) => ({ ...article(index), sourceMaterials: [{
+    contentMode: "readable", source: `Source ${index}`, text: `Detailed fact ${index}`,
+    title: `Title ${index}`, url: `https://example.com/${index}`,
+  }] }));
+  const freeze = (items: typeof articles) => buildBriefInputV2({ articles: items,
+    interestProfile: { feedTargets: {}, preferredKeywords: [] }, omitted: { insufficientEvidence: 0, overLimit: 0 },
+  });
+  const first = freeze(articles);
+  expect(first.payload.version).toBe(2);
+  expect(first.payload.model).toBe("gpt-6-luna");
+  expect(first.payload.articles).toHaveLength(20);
+  expect(first.payload.omitted.overLimit).toBe(2);
+  expect(first.payload.articles[0].sourceMaterials[0].text).toBe("Detailed fact 0");
+  expect(first.hash).toBe(freeze([...articles].reverse()).hash);
 });

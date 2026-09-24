@@ -37,5 +37,5 @@ export function digestBriefWordCount({
 }
 
 export function readingTimeMinutesForDigestBrief(input: Parameters<typeof digestBriefWordCount>[0]) {
-  return Math.max(1, Math.min(5, Math.ceil(digestBriefWordCount(input) / 180)));
+  return Math.max(1, Math.ceil(digestBriefWordCount(input) / 180));
 }

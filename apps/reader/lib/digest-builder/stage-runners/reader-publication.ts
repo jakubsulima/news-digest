@@ -4,7 +4,8 @@ import type { Database, Json } from "../../database.types";
 import { getDigestRunById } from "../../digest-runs";
 import { getDigestSettingsForRun } from "../../digest-settings";
 import { fallbackDigestBrief } from "../../ai-summary";
-import { buildBriefInput, materializeBrief } from "../../digest-brief-job";
+import { briefArticleIds, briefSourceMaterials, type BriefArticleSourceRow } from "../../brief-source-material";
+import { buildBriefInput, buildBriefInputV2, materializeBrief, type BriefInput } from "../../digest-brief-job";
 import { evidenceDetailsFromSignals } from "../../evidence";
 import { createSupabaseAdminClient } from "../../supabase";
 import { cleanArticleSummary, plainTextFromHtml } from "../../text";
@@ -274,6 +275,23 @@ export const runReaderPublicationStage: StageRunner = async ({ digestRunId }) =>
     : { data: [], error: null };
   if (publishedItems.error) throw publishedItems.error;
   const newsItemByCluster = new Map((publishedItems.data || []).map((item) => [item.story_cluster_id, item.id]));
+  const { data: existingJob, error: existingJobError } = await supabase.from("digest_brief_jobs")
+    .select("input_hash,input_payload,status,reason").eq("digest_run_id", digestRunId).maybeSingle();
+  if (existingJobError) throw existingJobError;
+  const useLuna = !existingJob && settings.useAiSummaries && Boolean(process.env.OPENAI_API_KEY)
+    && process.env.DIGEST_BRIEF_OPENAI_ENABLED !== "false";
+  const articleById = new Map<string, BriefArticleSourceRow>();
+  if (useLuna) {
+    const articleIds = [...new Set(selectedSnapshots.flatMap((snapshot) => briefArticleIds(snapshot.metadata)))];
+    for (const ids of chunk(articleIds, 40)) {
+      const { data, error: articleError } = await supabase.from("articles")
+        .select("id,canonical_url,content_mode,enriched_text,enriched_description,raw_summary,source,title")
+        .in("id", ids);
+      if (articleError) throw articleError;
+      for (const article of data || []) articleById.set(article.id, article);
+    }
+  }
+  const snapshotByCluster = new Map(selectedSnapshots.map((snapshot) => [snapshot.story_cluster_id, snapshot]));
   const briefingArticles = rows.flatMap((row) => {
     const storyClusterId = row.story_cluster_id;
     const newsItemId = storyClusterId ? newsItemByCluster.get(storyClusterId) : null;
@@ -290,21 +308,22 @@ export const runReaderPublicationStage: StageRunner = async ({ digestRunId }) =>
     source: row.source,
     sourceCount: row.source_count || 1,
     storyClusterId,
+    sourceMaterials: useLuna ? briefSourceMaterials(snapshotByCluster.get(storyClusterId)?.metadata ?? {}, articleById) : [],
     summary: row.summary,
     title: row.title,
     whyInteresting: jsonString(row.raw_payload || {}, "whyInteresting") || null,
   }];
   });
-  const frozen = buildBriefInput({
+  const briefInput = {
     articles: briefingArticles,
     interestProfile: { feedTargets: settings.feedTargets, preferredKeywords: settings.preferredKeywords },
     omitted: { insufficientEvidence: 0, overLimit: 0 },
-  });
-  const reason = !rows.length ? "no_articles" : !settings.useAiSummaries ? "disabled" : !frozen.payload.articles.length ? "insufficient_evidence" : "pending";
+  };
+  const frozen = existingJob
+    ? { hash: existingJob.input_hash, payload: existingJob.input_payload as unknown as BriefInput }
+    : useLuna ? buildBriefInputV2(briefInput) : buildBriefInput(briefInput);
+  const reason = existingJob?.reason || (!rows.length ? "no_articles" : !settings.useAiSummaries ? "disabled" : !frozen.payload.articles.length ? "insufficient_evidence" : "pending");
   const fallback = materializeBrief(fallbackDigestBrief(frozen.payload.articles), frozen.payload);
-  const { data: existingJob, error: existingJobError } = await supabase.from("digest_brief_jobs").select("input_hash,status").eq("digest_run_id", digestRunId).maybeSingle();
-  if (existingJobError) throw existingJobError;
-  if (existingJob && existingJob.input_hash !== frozen.hash) throw new Error("Frozen briefing input hash conflict.");
   if (!existingJob) {
     const { error: jobError } = await supabase.from("digest_brief_jobs").insert({
       digest_run_id: digestRunId, input_hash: frozen.hash, input_payload: frozen.payload,
@@ -315,7 +334,7 @@ export const runReaderPublicationStage: StageRunner = async ({ digestRunId }) =>
     });
     if (jobError) throw jobError;
   }
-  const { error: digestSummaryError } = await supabase.from("digest_summaries").upsert({
+  const { error: digestSummaryError } = existingJob?.status === "generated" ? { error: null } : await supabase.from("digest_summaries").upsert({
     coverage_note: fallback.coverageNote, digest_date: run.report_date, digest_run_id: digestRunId,
     generation_kind: "fallback", generation_reason: reason, highlights: fallback.highlights,
     input_hash: frozen.hash, prompt_version: frozen.payload.promptVersion,

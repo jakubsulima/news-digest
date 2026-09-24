@@ -86,6 +86,7 @@ NVIDIA_API_KEY=
 NVIDIA_API_URL=https://integrate.api.nvidia.com/v1/chat/completions
 NVIDIA_MODEL=google/diffusiongemma-26b-a4b-it
 NVIDIA_FALLBACK_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
+OPENAI_API_KEY=
 ```
 
 Notes:
@@ -94,7 +95,9 @@ Notes:
 - `ALLOWED_READER_EMAILS` is a comma-separated login allowlist.
 - Set `NEXT_PUBLIC_APP_URL` to the production Vercel URL after deployment.
 - `DIGEST_RUN_RETENTION_LIMIT` is optional. Queued and running runs are never pruned.
-- `NVIDIA_API_KEY`, `NVIDIA_API_URL`, and `NVIDIA_MODEL` enable the optional AI summaries and daily briefing. `NVIDIA_FALLBACK_MODEL` is used on the second of up to three durable publication attempts. The values shown above are the defaults.
+- `NVIDIA_API_KEY`, `NVIDIA_API_URL`, and `NVIDIA_MODEL` enable the optional AI previews and short summaries. Without an OpenAI key, NVIDIA also generates the daily briefing. `NVIDIA_FALLBACK_MODEL` is used on the second of up to three durable NVIDIA briefing attempts. The values shown above are the defaults.
+- Add `OPENAI_API_KEY` as a server-side Vercel environment variable to use `gpt-6-luna` for new daily briefings in pipeline v2. The key is not needed during build and must never have a `NEXT_PUBLIC_` prefix. Existing frozen jobs retain their provider. Set `DIGEST_BRIEF_OPENAI_ENABLED=false` to route new jobs back to NVIDIA without removing the OpenAI key. Redeploy after changing Vercel environment variables. Before enabling pipeline v2 in production, complete the migration and watchdog setup described below.
+- Luna briefings use up to 20 selected stories and bounded excerpts from readable article text. Full-text source packets are frozen with the job so retries use the same evidence. The reader still publishes a fallback briefing before the AI request; AI quality and latency should be checked on real runs after the key is added.
 - Keep `DIGEST_PIPELINE_V2_ENABLED=false` until the v2 migration and the single Supabase watchdog are installed. The flag affects new runs only.
 
 ## Supabase Setup

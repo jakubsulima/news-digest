@@ -6,8 +6,19 @@ import type { DigestBriefSupport } from "./digest-brief";
 import type { DigestBriefArticle, NvidiaDigestBrief } from "./ai-summary";
 
 export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v4";
+export const LUNA_BRIEF_PROMPT_VERSION = "digest-brief-luna-v1";
 export const MAX_BRIEF_ARTICLES = 10;
+export const MAX_LUNA_BRIEF_ARTICLES = 20;
 const MAX_INPUT_CHARS = 48_000;
+const MAX_LUNA_INPUT_CHARS = 80_000;
+
+export type BriefSourceMaterial = {
+  contentMode: string;
+  source: string;
+  text: string;
+  title: string;
+  url: string;
+};
 
 export type FrozenBriefArticle = DigestBriefArticle & {
   evidence: Json;
@@ -25,6 +36,16 @@ export type BriefInputV1 = {
   version: 1;
 };
 
+export type BriefInputV2 = Omit<BriefInputV1, "articles" | "promptVersion" | "version"> & {
+  articles: Array<FrozenBriefArticle & { sourceMaterials: BriefSourceMaterial[] }>;
+  model: "gpt-6-luna";
+  promptVersion: typeof LUNA_BRIEF_PROMPT_VERSION;
+  provider: "openai";
+  version: 2;
+};
+
+export type BriefInput = BriefInputV1 | BriefInputV2;
+
 function evidenceRecord(value: Json) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, Json | undefined>
@@ -38,7 +59,7 @@ function evidenceStatus(value: Json) {
     : null;
 }
 
-function paragraphSupport(input: BriefInputV1, articleIndexes: number[]): DigestBriefSupport {
+function paragraphSupport(input: BriefInput, articleIndexes: number[]): DigestBriefSupport {
   const articles = [...new Set(articleIndexes)].flatMap(index => input.articles[index] ? [input.articles[index]] : []);
   const names = new Set(articles.flatMap(article => {
     const value = evidenceRecord(article.evidence).sourceNames;
@@ -60,7 +81,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "version">) {
+function selectBriefArticles(input: Omit<BriefInputV1, "promptVersion" | "version">, limit: number, summaryChars = 2_500) {
   const eligible = input.articles.filter((article) => {
     return evidenceStatus(article.evidence) === "full_text" || evidenceStatus(article.evidence) === "corroborated_summary";
   });
@@ -80,14 +101,14 @@ export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "ver
     ranked.push(next);
     categories.set(next.category, (categories.get(next.category) || 0) + 1);
   }
-  const selected = ranked.slice(0, MAX_BRIEF_ARTICLES).map((article, index) => ({
+  const selected = ranked.slice(0, limit).map((article, index) => ({
     ...article,
     index,
-    summary: article.summary.slice(0, 2_500),
+    summary: article.summary.slice(0, summaryChars),
     title: article.title.slice(0, 300),
     whyInteresting: article.whyInteresting?.slice(0, 600) ?? null,
   }));
-  const payload: BriefInputV1 = {
+  return {
     articles: selected,
     selectionDecisions: input.articles.map(a => ({ storyClusterId: a.storyClusterId,
       reason: !eligible.includes(a) ? "insufficient_evidence" : selected.some(s => s.newsItemId === a.newsItemId) ? "selected" : ranked.some(s => s.newsItemId === a.newsItemId) ? "over_limit" : "duplicate_story",
@@ -98,8 +119,14 @@ export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "ver
     },
     omitted: {
       insufficientEvidence: input.articles.length - eligible.length,
-      overLimit: Math.max(0, ranked.length - MAX_BRIEF_ARTICLES),
+      overLimit: Math.max(0, ranked.length - limit),
     },
+  };
+}
+
+export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "version">) {
+  const payload: BriefInputV1 = {
+    ...selectBriefArticles(input, MAX_BRIEF_ARTICLES),
     promptVersion: DIGEST_BRIEF_PROMPT_VERSION,
     version: 1,
   };
@@ -108,7 +135,24 @@ export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "ver
   return { hash: createHash("sha256").update(serialized).digest("hex"), payload };
 }
 
-export function materializeBrief(brief: NvidiaDigestBrief, input: BriefInputV1) {
+export function buildBriefInputV2(input: Omit<BriefInputV2, "promptVersion" | "version" | "model" | "provider">) {
+  const selected = selectBriefArticles(input, MAX_LUNA_BRIEF_ARTICLES, 800);
+  const payload: BriefInputV2 = {
+    ...selected,
+    articles: selected.articles.map((article) => ({ ...article,
+      sourceMaterials: input.articles.find((source) => source.newsItemId === article.newsItemId)?.sourceMaterials ?? [],
+    })),
+    model: "gpt-6-luna",
+    promptVersion: LUNA_BRIEF_PROMPT_VERSION,
+    provider: "openai",
+    version: 2,
+  };
+  const serialized = canonical(payload);
+  if (serialized.length > MAX_LUNA_INPUT_CHARS) throw new Error("Frozen Luna briefing input exceeds its size limit.");
+  return { hash: createHash("sha256").update(serialized).digest("hex"), payload };
+}
+
+export function materializeBrief(brief: NvidiaDigestBrief, input: BriefInput) {
   const reference = (index: number) => {
     const article = input.articles[index];
     return article ? { newsItemId: article.newsItemId, source: article.source, title: article.title } : null;
@@ -128,7 +172,7 @@ export function materializeBrief(brief: NvidiaDigestBrief, input: BriefInputV1) 
         support: paragraphSupport(input, paragraph.articleIndexes),
       }] : [];
     });
-    return paragraphs.length ? [{ category: section.category, paragraphs, title: section.title }] : [];
+    return paragraphs.length ? [{ category: section.category, kind: section.kind, paragraphs, title: section.title }] : [];
   });
   const watchlist = brief.watchlist.map((item) => ({
     references: item.articleIndexes.flatMap((index) => { const linked = reference(index); return linked ? [linked] : []; }),
