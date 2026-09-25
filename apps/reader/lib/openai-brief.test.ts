@@ -73,6 +73,18 @@ it("uses Responses structured output, preserves source text and records token us
   expect(result.metrics).toMatchObject({ inputTokens: 10_000, outputTokens: 4_000, reasoningTokens: 500, estimatedCostUsd: 0.003 });
 });
 
+it("uses the frozen model and avoids Luna cost estimates for another model", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", usage: { input_tokens: 10_000, output_tokens: 4_000 },
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(rawBrief(20)) }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubEnv("DIGEST_BRIEF_OPENAI_MODEL", "gpt-6-luna");
+  const result = await generateDigestBriefWithLuna({ input: { ...input, model: "gpt-future" }, timeoutMs: 5_000 });
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe("gpt-future");
+  expect(result).toMatchObject({ model: "gpt-future", status: "generated", metrics: { estimatedCostUsd: null } });
+});
+
 it("rejects a generated section that assigns Haiku's price to Opus", async () => {
   const pricedInput = structuredClone(input);
   pricedInput.articles[0].sourceMaterials[0].text = "Opus 5.5 costs $4/$20. Haiku 4.5 costs $1/$5.";

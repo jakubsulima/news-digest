@@ -9,8 +9,8 @@ import { validateBriefGrounding } from "./brief-grounding-validation";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const MAX_OUTPUT_TOKENS = 7_000;
-const PRICE_INPUT_PER_MILLION = 0.10;
-const PRICE_OUTPUT_PER_MILLION = 0.50;
+const LUNA_PRICE_INPUT_PER_MILLION = 0.10;
+const LUNA_PRICE_OUTPUT_PER_MILLION = 0.50;
 
 const text = z.string().trim().min(1);
 const rawBriefSchema = z.object({
@@ -56,7 +56,7 @@ export type OpenAIBriefMetrics = {
   inputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
-  estimatedCostUsd: number;
+  estimatedCostUsd: number | null;
   providerLatencyMs: number;
 };
 
@@ -168,7 +168,9 @@ export async function generateDigestBriefWithLuna({ input, timeoutMs, repairInst
       inputTokens,
       outputTokens,
       reasoningTokens: body.usage?.output_tokens_details?.reasoning_tokens || 0,
-      estimatedCostUsd: Number(((inputTokens * PRICE_INPUT_PER_MILLION + outputTokens * PRICE_OUTPUT_PER_MILLION) / 1_000_000).toFixed(6)),
+      estimatedCostUsd: model === "gpt-6-luna"
+        ? Number(((inputTokens * LUNA_PRICE_INPUT_PER_MILLION + outputTokens * LUNA_PRICE_OUTPUT_PER_MILLION) / 1_000_000).toFixed(6))
+        : null,
       providerLatencyMs: Date.now() - startedAt,
     };
     const outputItems = body.output?.flatMap((item) => item.type === "message" ? item.content || [] : []) || [];

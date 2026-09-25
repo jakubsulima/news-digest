@@ -7,6 +7,7 @@ import type { DigestBriefArticle, NvidiaDigestBrief } from "./ai-summary";
 
 export const DIGEST_BRIEF_PROMPT_VERSION = "digest-brief-v4";
 export const LUNA_BRIEF_PROMPT_VERSION = "digest-brief-luna-v3";
+const DEFAULT_DIGEST_BRIEF_OPENAI_MODEL = "gpt-6-luna";
 export const MAX_BRIEF_ARTICLES = 10;
 export const MAX_LUNA_BRIEF_ARTICLES = 20;
 const MAX_INPUT_CHARS = 48_000;
@@ -38,7 +39,7 @@ export type BriefInputV1 = {
 
 export type BriefInputV2 = Omit<BriefInputV1, "articles" | "promptVersion" | "version"> & {
   articles: Array<FrozenBriefArticle & { sourceMaterials: BriefSourceMaterial[] }>;
-  model: "gpt-6-luna";
+  model: string;
   promptVersion: typeof LUNA_BRIEF_PROMPT_VERSION;
   provider: "openai";
   version: 2;
@@ -137,12 +138,13 @@ export function buildBriefInput(input: Omit<BriefInputV1, "promptVersion" | "ver
 
 export function buildBriefInputV2(input: Omit<BriefInputV2, "promptVersion" | "version" | "model" | "provider">) {
   const selected = selectBriefArticles(input, MAX_LUNA_BRIEF_ARTICLES, 800);
+  const model = process.env.DIGEST_BRIEF_OPENAI_MODEL?.trim() || DEFAULT_DIGEST_BRIEF_OPENAI_MODEL;
   const payload: BriefInputV2 = {
     ...selected,
     articles: selected.articles.map((article) => ({ ...article,
       sourceMaterials: input.articles.find((source) => source.newsItemId === article.newsItemId)?.sourceMaterials ?? [],
     })),
-    model: "gpt-6-luna",
+    model,
     promptVersion: LUNA_BRIEF_PROMPT_VERSION,
     provider: "openai",
     version: 2,
