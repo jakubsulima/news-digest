@@ -5,8 +5,10 @@ import { unsupportedModelPriceClaims } from "./brief-price-validation";
 function numericValues(text: string) {
   // Some upstream extractors insert a space inside decimal numbers and model versions.
   const normalized = text.replace(/\b(\d{1,3})[.,]\s+(\d{1,3})\b/gu, "$1.$2");
-  return new Set([...normalized.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?![\p{L}\p{N}])/gu)]
+  const values = new Set([...normalized.matchAll(/\d+(?:[.,]\d+)?/gu)]
     .map((match) => String(Number(match[0].replace(",", ".")))));
+  for (const match of normalized.matchAll(/\b(?:19|20)(\d)0s\b/giu)) values.add(String(Number(match[1]) * 10));
+  return values;
 }
 
 export function unsupportedNumericClaims(brief: NvidiaDigestBrief, input: BriefInputV2) {
