@@ -75,15 +75,21 @@ export function parseLunaBrief(value: unknown, articleCount: number): { brief: N
     errors.push("Highlights must reference 1–4 selected stories.");
   }
   const highlightIndexes = new Set(raw.highlights.map((item) => item.articleIndex));
-  if (!raw.summaryArticleIndexes.length || raw.summaryArticleIndexes.some((index) => !validIndex(index) || !highlightIndexes.has(index))) {
-    errors.push("Lead references must point to highlighted stories.");
+  if (!raw.summaryArticleIndexes.length || raw.summaryArticleIndexes.some((index) => !validIndex(index))) {
+    errors.push("Lead references must point to selected stories.");
+  } else if (raw.summaryArticleIndexes.some((index) => !highlightIndexes.has(index))) {
+    warnings.push("Some lead references are not repeated in highlights.");
   }
   if (raw.watchlist.some((item) => item.articleIndexes.some((index) => !validIndex(index)))) {
     errors.push("Watchlist contains an invalid story reference.");
   }
-  const expectedFullCount = Math.min(8, articleCount);
-  if (raw.sections.filter((section) => section.kind === "full").length < expectedFullCount) {
-    errors.push(`At least ${expectedFullCount} sections must be full.`);
+  const fullCount = raw.sections.filter((section) => section.kind === "full").length;
+  const minimumFullCount = Math.min(4, articleCount);
+  const targetFullCount = Math.min(8, articleCount);
+  if (fullCount < minimumFullCount) {
+    errors.push(`At least ${minimumFullCount} sections must be full.`);
+  } else if (fullCount < targetFullCount) {
+    warnings.push(`Aim for at least ${targetFullCount} full sections.`);
   }
   for (const section of raw.sections) {
     const words = wordCount(section.text);
