@@ -40,6 +40,22 @@ it("rejects an omitted story and accepts full coverage of 20", () => {
   expect(parsed.brief?.readingTimeMinutes).toBeGreaterThan(5);
 });
 
+it("keeps a complete briefing when lead links and full-section count miss editorial targets", () => {
+  const response = rawBrief(20);
+  response.summaryArticleIndexes = [1];
+  response.sections.slice(4, 8).forEach((section) => { section.kind = "short"; });
+  const parsed = parseLunaBrief(response, 20);
+  expect(parsed.report.valid).toBe(true);
+  expect(parsed.report.warnings).toContain("Some lead references are not repeated in highlights.");
+  expect(parsed.report.warnings).toContain("Aim for at least 8 full sections.");
+});
+
+it("still rejects a briefing with too few developed sections", () => {
+  const response = rawBrief(20);
+  response.sections.slice(3, 8).forEach((section) => { section.kind = "short"; });
+  expect(parseLunaBrief(response, 20).report.hardErrors).toContain("At least 4 sections must be full.");
+});
+
 it("uses Responses structured output, preserves source text and records token usage", async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
     status: "completed", usage: { input_tokens: 10_000, output_tokens: 4_000, output_tokens_details: { reasoning_tokens: 500 } },
