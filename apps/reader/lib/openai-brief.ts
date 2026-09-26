@@ -48,6 +48,7 @@ const responseSchema = {
 
 type OpenAIResponse = {
   status?: string;
+  incomplete_details?: { reason?: string };
   output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string; refusal?: string }> }>;
   usage?: { input_tokens?: number; output_tokens?: number; output_tokens_details?: { reasoning_tokens?: number } };
 };
@@ -114,10 +115,12 @@ export function parseLunaBrief(value: unknown, articleCount: number): { brief: N
   return { brief: errors.length ? null : brief, report: { valid: errors.length === 0, hardErrors: errors, warnings } };
 }
 
-export async function generateDigestBriefWithLuna({ input, timeoutMs, repairInstructions }: {
+export async function generateDigestBriefWithLuna({ input, timeoutMs, repairInstructions, previousErrorCode, attempt = 1 }: {
   input: BriefInputV2;
   timeoutMs: number;
   repairInstructions?: string;
+  previousErrorCode?: string | null;
+  attempt?: number;
 }): Promise<DigestBriefGenerationResult & { metrics?: OpenAIBriefMetrics }> {
   const fallback = fallbackDigestBrief(input.articles);
   const model = input.model;
@@ -146,7 +149,8 @@ export async function generateDigestBriefWithLuna({ input, timeoutMs, repairInst
         model,
         store: false,
         reasoning: { effort: "low" },
-        max_output_tokens: MAX_OUTPUT_TOKENS,
+        max_output_tokens: previousErrorCode === "openai_output_limit"
+          ? MAX_OUTPUT_TOKENS + 3_500 * Math.min(2, Math.max(1, attempt - 1)) : MAX_OUTPUT_TOKENS,
         instructions,
         input: prompt,
         text: { format: { type: "json_schema", name: "daily_brief_v2", strict: true, schema: responseSchema } },
@@ -156,7 +160,11 @@ export async function generateDigestBriefWithLuna({ input, timeoutMs, repairInst
     if (!response.ok) {
       const configurationError = [400, 401, 402, 403, 404, 422].includes(response.status);
       console.warn("[openai-brief] request_failed", { model, status: response.status, elapsedMs: Date.now() - startedAt });
-      return { brief: fallback, model, status: configurationError ? "configuration_error" : "retryable_failure", errorCode: `openai_http_${response.status}` };
+      const retryAfter = response.headers?.get("retry-after");
+      const retryDelay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter)
+        ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : 0;
+      const retryAfterMs = Number.isFinite(retryDelay) ? Math.max(0, Math.min(900_000, retryDelay)) : 0;
+      return { brief: fallback, model, status: configurationError ? "configuration_error" : "retryable_failure", errorCode: `openai_http_${response.status}`, retryAfterMs };
     }
     const body = await response.json() as OpenAIResponse;
     const inputTokens = body.usage?.input_tokens || 0;
@@ -178,6 +186,12 @@ export async function generateDigestBriefWithLuna({ input, timeoutMs, repairInst
       .filter((item) => item.type === "output_text" && typeof item.text === "string")
       .map((item) => item.text).join("") || "";
     if (body.status !== "completed" || !content) {
+      if (body.status === "incomplete" && body.incomplete_details?.reason === "max_output_tokens") {
+        return { brief: fallback, model, status: "retryable_failure", errorCode: "openai_output_limit", metrics };
+      }
+      if (body.status === "incomplete" && body.incomplete_details?.reason === "content_filter") {
+        return { brief: fallback, model, status: "terminal_failure", errorCode: "openai_content_filter", metrics };
+      }
       return { brief: fallback, model, status: "retryable_failure", errorCode: body.status === "incomplete" ? "openai_incomplete" : "openai_empty_or_refused", metrics };
     }
     let parsed: unknown;

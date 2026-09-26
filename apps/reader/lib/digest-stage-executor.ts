@@ -43,15 +43,22 @@ async function advanceV2(run: Awaited<ReturnType<typeof getDigestRunById>> & {})
       if (finish.error || finish.data !== true) throw finish.error || new Error("Stage completion lost its lease.");
     }
     if (stage.stage_name === "finalization") {
-      const { error } = await supabase.from("digest_runs").update({ error_message: null, finished_at: new Date().toISOString(), status: "succeeded" }).eq("id", run.id).eq("status", "running");
-      if (error) throw error;
       return { runId: run.id, status: "succeeded", advancedStage: stage.stage_name, message: "Run finalized." };
     }
     return { runId: run.id, status: "running", advancedStage: stage.stage_name, message: result.message || `${stage.stage_name} succeeded.` };
   } catch (error) {
     const message = `${stage.stage_name}: ${errorMessage(error)}`;
-    await rpc("finish_digest_stage", { p_error: message, p_lease_token: leaseToken, p_metrics: {}, p_next_attempt_at: null, p_stage_id: stage.id, p_status: "failed" });
-    await supabase.from("digest_runs").update({ error_message: message, finished_at: new Date().toISOString(), status: "failed" }).eq("id", run.id).eq("status", "running");
+    // AI work has durable input/candidates. Give storage failures a bounded
+    // recovery window without discarding a validated provider response.
+    const retry = stage.stage_name === "ai_brief" && stage.attempt_count < 6;
+    const finish = await rpc("finish_digest_stage", { p_error: message, p_lease_token: leaseToken,
+      p_metrics: { infrastructureRetry: true }, p_next_attempt_at: retry ? new Date(Date.now() + 30_000).toISOString() : null,
+      p_stage_id: stage.id, p_status: retry ? "queued" : "failed" });
+    // A lost lease or uncertain commit belongs to the current worker/watchdog.
+    // Never mark the run failed unless our fenced write actually succeeded.
+    if (finish.error || finish.data !== true || retry) {
+      return { runId: run.id, status: "running", advancedStage: null, message: `Recovery pending: ${message}` };
+    }
     return { runId: run.id, status: "failed", advancedStage: stage.stage_name, message };
   }
 }

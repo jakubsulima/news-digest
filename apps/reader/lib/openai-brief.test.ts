@@ -170,3 +170,42 @@ it("sends the same evidence used by validation instead of conflicting feed summa
   expect(prompt).not.toContain("2026-09-26T00:00:00Z");
   expect(prompt).toContain(prose);
 });
+
+it("identifies output truncation so retries can request more space without shortening the brief", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+    output: [{ type: "message", content: [{ type: "output_text", text: '{"summary":' }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000 });
+  expect(result).toMatchObject({ status: "retryable_failure", errorCode: "openai_output_limit" });
+});
+
+it("respects the provider's retry interval on rate limiting", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 429,
+    headers: new Headers({ "retry-after": "180" }), json: async () => ({ error: { code: "rate_limit_exceeded" } }) }));
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000 });
+  expect(result).toMatchObject({ status: "retryable_failure", retryAfterMs: 180000 });
+});
+
+it("increases the output budget only after confirmed truncation and still validates the whole response", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(rawBrief(20)) }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000, attempt: 2, previousErrorCode: "openai_output_limit" });
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).max_output_tokens).toBe(10500);
+  expect(result.status).toBe("generated");
+  await generateDigestBriefWithLuna({ input, timeoutMs: 5000, attempt: 3, previousErrorCode: "openai_output_limit" });
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body).max_output_tokens).toBe(14000);
+  await generateDigestBriefWithLuna({ input, timeoutMs: 5000, attempt: 2, previousErrorCode: "openai_timeout" });
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body).max_output_tokens).toBe(7000);
+});
+
+it("never publishes filtered output or a partial response even when its JSON is valid", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "incomplete", incomplete_details: { reason: "content_filter" },
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(rawBrief(20)) }] }],
+  }) }));
+  expect(await generateDigestBriefWithLuna({ input, timeoutMs: 5000 })).toMatchObject({ status: "terminal_failure", errorCode: "openai_content_filter" });
+});

@@ -721,6 +721,7 @@ ${sourceMaterial}
 }
 
 export type DigestBriefGenerationResult = {
+  retryAfterMs?: number;
   validationReport?: BriefValidationReport;
   brief: NvidiaDigestBrief;
   model: string;

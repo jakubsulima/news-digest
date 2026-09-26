@@ -27,6 +27,9 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
     }
     return { aiBrief: { brief: job.candidate_payload, kind: "ai", reason: null } };
   }
+  if (job.generation_attempt_count >= MAX_GENERATIONS) {
+    return { aiBrief: { brief: fallback, kind: "fallback", reason: job.last_error_code || "generation_attempts_exhausted" } };
+  }
   const remainingMs = deadlineMs - Date.now() - 20_000;
   if (remainingMs < 10_000) return { complete: false, message: "AI briefing yielded before generation: insufficient deadline budget." };
 
@@ -40,7 +43,7 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
     ? previousReport.hardErrors.filter((error): error is string => typeof error === "string").map(error => error.slice(0, 240)).join("\n")
     : undefined;
   const generation = input.version === 2 && input.provider === "openai"
-    ? await generateDigestBriefWithLuna({ input, repairInstructions, timeoutMs: Math.min(60_000, remainingMs) })
+    ? await generateDigestBriefWithLuna({ input, repairInstructions, attempt, previousErrorCode: job.last_error_code, timeoutMs: Math.min(60_000, remainingMs) })
     : await generateDigestBriefWithNvidia({ articles: input.articles, attempt, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, interestProfile: input.interestProfile, timeoutMs: Math.min(60_000, remainingMs) });
 
   const report = generation.validationReport ?? { valid: false, hardErrors: [generation.errorCode || "generation_failed"], warnings: [] };
@@ -58,7 +61,9 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
   if (generation.status === "configuration_error" || generation.status === "terminal_failure" || attempt >= MAX_GENERATIONS) {
     return { aiBrief: { brief: fallback, kind: "fallback", reason: generation.errorCode }, metrics: { generationAttempt: attempt, model: generation.model, ...providerMetrics } };
   }
-  const delayMs = attempt === 1 ? 30_000 + Math.floor(Math.random() * 10_001) : 120_000 + Math.floor(Math.random() * 30_001);
-  await supabase.from("digest_brief_jobs").update({ last_error_code: generation.errorCode, reason: generation.errorCode, status: "retry_wait" }).eq("digest_run_id", digestRunId).eq("status", "generating");
-  return { complete: false, message: `AI briefing retry ${attempt}/${MAX_GENERATIONS} queued.`, nextAttemptAt: new Date(Date.now() + delayMs).toISOString(), metrics: { generationAttempt: attempt, model: generation.model, ...providerMetrics } };
+  const backoffMs = attempt === 1 ? 30_000 + Math.floor(Math.random() * 10_001) : 120_000 + Math.floor(Math.random() * 30_001);
+  const delayMs = Math.max(backoffMs, generation.retryAfterMs || 0);
+  // finish_digest_stage checkpoints the retry and job state atomically under
+  // the lease; a stale worker must never update a new owner's generation.
+  return { complete: false, message: `AI briefing retry ${attempt}/${MAX_GENERATIONS} queued.`, nextAttemptAt: new Date(Date.now() + delayMs).toISOString(), metrics: { generationAttempt: attempt, lastErrorCode: generation.errorCode, model: generation.model, ...providerMetrics } };
 };

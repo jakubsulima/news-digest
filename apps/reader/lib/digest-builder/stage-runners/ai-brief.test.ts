@@ -69,3 +69,29 @@ it("prioritizes blocking errors over long editorial warnings when repairing a Lu
   await runAiBriefStage(context());
   expect(mocks.generateLuna.mock.calls[0][0].repairInstructions).toBe("Section 8 has an unsupported number.");
 });
+
+
+it("does not make a fourth provider call after a crashed third attempt", async () => {
+  mocks.from().single.mockResolvedValue({ data: { input_payload: input, status: "retry_wait", generation_attempt_count: 3 }, error: null });
+  const result = await runAiBriefStage(context());
+  expect(mocks.generate).not.toHaveBeenCalled();
+  expect(result.aiBrief?.kind).toBe("fallback");
+});
+
+it("reuses a validated candidate after a process restart without another provider request", async () => {
+  const candidate = { summary: "Already validated" };
+  mocks.from().single.mockResolvedValue({ data: { input_payload: input, status: "generated", generation_attempt_count: 3,
+    candidate_payload: candidate, validation_report: { valid: true } }, error: null });
+  const result = await runAiBriefStage(context());
+  expect(mocks.generate).not.toHaveBeenCalled();
+  expect(result.aiBrief).toMatchObject({ kind: "ai", brief: candidate });
+});
+
+it("persists provider backoff through the fenced stage checkpoint", async () => {
+  mocks.generate.mockResolvedValue({ brief: fallbackDigestBrief([]), model: "test", status: "retryable_failure", errorCode: "http_429", retryAfterMs: 180000 });
+  const before = Date.now();
+  const result = await runAiBriefStage(context());
+  expect(Date.parse(result.nextAttemptAt!)).toBeGreaterThanOrEqual(before + 180000);
+  expect(result.metrics).toMatchObject({ lastErrorCode: "http_429" });
+  expect(mocks.from().update).not.toHaveBeenCalled();
+});
