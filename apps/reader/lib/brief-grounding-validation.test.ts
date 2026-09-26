@@ -49,3 +49,19 @@ it("reads figures with attached units and a decade paraphrase", () => {
   expect(unsupportedNumericClaims(brief("Deficyt wyniósł 21 mld funtów, import 19,1 mld kg, a projekt wymaga 90 MW. Firma planuje ofertę za 35 mld dolarów i uruchomienie w latach 30."), article))
     .toEqual([]);
 });
+
+it("accepts the production Kiteworks shutdown window translated to a 24-hour clock", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "In Central Europe, shut down between 4:00 a.m. and 10:00 a.m. In New York, from 10:00 p.m. Friday to 4:00 a.m. Saturday.";
+  expect(unsupportedNumericClaims(brief("W Europie od 04:00 do 10:00, w Nowym Jorku od 22:00 do 04:00."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Firma wyłączy 22 serwery."), article)).toEqual([expect.stringContaining("sources: 22")]);
+  expect(unsupportedNumericClaims(brief("Okno zaczyna się o 22:30."), article)).toEqual([expect.stringContaining("time:22:30")]);
+});
+
+it("handles noon, midnight and AM/PM without minutes in either direction", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The windows start at 12 AM, 12 p.m. and 9:15 PM.";
+  expect(unsupportedNumericClaims(brief("Okna zaczynają się o 00:00, 12:00 i 21:15."), article)).toEqual([]);
+  article.articles[0].sourceMaterials[0].text = "The window starts at 22:00.";
+  expect(unsupportedNumericClaims(brief("Start: 10:00 p.m."), article)).toEqual([]);
+});

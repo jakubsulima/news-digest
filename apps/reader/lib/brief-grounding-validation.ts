@@ -3,10 +3,22 @@ import type { BriefInputV2 } from "./digest-brief-job";
 import { unsupportedModelPriceClaims } from "./brief-price-validation";
 
 function numericValues(text: string) {
+  const times = new Set<string>();
+  // Compare whole clock times, not their hour/minute fragments. A translation
+  // from 10:00 p.m. to 22:00 must not authorize an unrelated quantity of 22.
+  const withoutTimes = text.replace(/\b(\d{1,2})(?::([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?|(\s*(?:a\.?m\.?|p\.?m\.?)))(?!\w)/giu,
+    (match, hourText: string, minuteText: string | undefined, marker: string | undefined, hourMarker: string | undefined) => {
+      let hour = Number(hourText);
+      const period = (marker || hourMarker || "").replace(/[.\s]/gu, "").toLowerCase();
+      if (period ? hour < 1 || hour > 12 : hour > 23) return match;
+      if (period) hour = hour % 12 + (period === "pm" ? 12 : 0);
+      times.add(`time:${String(hour).padStart(2, "0")}:${minuteText || "00"}`);
+      return " ";
+    });
   // Some upstream extractors insert a space inside decimal numbers and model versions.
-  const normalized = text.replace(/\b(\d{1,3})[.,]\s+(\d{1,3})\b/gu, "$1.$2");
-  const values = new Set([...normalized.matchAll(/\d+(?:[.,]\d+)?/gu)]
-    .map((match) => String(Number(match[0].replace(",", ".")))));
+  const normalized = withoutTimes.replace(/\b(\d{1,3})[.,]\s+(\d{1,3})\b/gu, "$1.$2");
+  const values = new Set([...times, ...[...normalized.matchAll(/\d+(?:[.,]\d+)?/gu)]
+    .map((match) => String(Number(match[0].replace(",", "."))))]);
   for (const match of normalized.matchAll(/\b(?:19|20)(\d)0s\b/giu)) values.add(String(Number(match[1]) * 10));
   return values;
 }
