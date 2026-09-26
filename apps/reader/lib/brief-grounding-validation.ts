@@ -2,7 +2,18 @@ import type { NvidiaDigestBrief } from "./ai-summary";
 import type { BriefInputV2 } from "./digest-brief-job";
 import { unsupportedModelPriceClaims } from "./brief-price-validation";
 
-function numericValues(text: string) {
+function numericValues(text: string, source = false) {
+  // Be conservative for old frozen inputs without a language tag: recognize
+  // comma grouping only in clearly English prose, never in Polish output.
+  const englishMarkers = new Set(text.toLowerCase().match(/\b(?:the|of|to|and|with|for|from|than)\b/gu) || []);
+  const englishGrouping = source && englishMarkers.size >= 3 && !/\b(?:oraz|jest|wynosi|który|które|się)\b/iu.test(text);
+  if (englishGrouping) {
+    text = text.replace(/(?<![\d.,])\b\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])/gu, value => value.replace(/,/gu, ""));
+  }
+  if (source) {
+    const dozens: Record<string, number> = { "half a": 6, a: 12, one: 12, two: 24, three: 36 };
+    text = text.replace(/\b(half a|a|one|two|three) dozen\b/giu, (_, count: string) => String(dozens[count.toLowerCase()]));
+  }
   const times = new Set<string>();
   // Compare whole clock times, not their hour/minute fragments. A translation
   // from 10:00 p.m. to 22:00 must not authorize an unrelated quantity of 22.
@@ -29,13 +40,13 @@ export function unsupportedNumericClaims(brief: NvidiaDigestBrief, input: BriefI
   const errors: string[] = [];
   const check = (text: string, articleIndexes: number[], label: string) => {
     const articles = [...new Set(articleIndexes)].flatMap((index) => input.articles[index] ? [input.articles[index]] : []);
-    const sourceText = articles.flatMap((article) => {
+    const sourceTexts = articles.flatMap((article) => {
       const readable = article.sourceMaterials.filter((material) => material.contentMode === "readable");
       const materials = readable.length ? readable : article.sourceMaterials;
-      return [article.title, ...(readable.length ? [] : [article.summary]),
-        ...materials.flatMap((material) => [material.title, material.text])];
-    }).join(" ");
-    const sourceValues = numericValues(sourceText);
+      const storyContext = [article.title, ...(readable.length ? [] : [article.summary])].join("\n");
+      return materials.length ? materials.map((material) => `${storyContext}\n${material.title}\n${material.text}`) : [storyContext];
+    });
+    const sourceValues = new Set(sourceTexts.flatMap(text => [...numericValues(text, true)]));
     const missing = [...numericValues(text)].filter((value) => !sourceValues.has(value));
     if (missing.length) errors.push(`${label} contains numbers absent from its cited sources: ${missing.slice(0, 8).join(", ")}.`);
   };

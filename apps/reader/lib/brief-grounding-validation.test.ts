@@ -82,3 +82,38 @@ it("normalizes space-grouped thousands without merging ordinary lists", () => {
   article.articles[0].sourceMaterials[0].text = "There are 1 500 contracts.";
   expect(unsupportedNumericClaims(brief("Jest 1500 umów."), article)).toEqual([]);
 });
+
+it("recognizes English grouped thousands from the production source without accepting changed quantities", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The council said the petition from residents gathered more than 7,707 signatures in just a few days. The projections for the region show 66,800 deaths, with 31,400 in Nigeria.";
+  expect(unsupportedNumericClaims(brief("Petycja zebrała 7707 podpisów, prognozy wskazują 66 800 i 31 400 zgonów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Petycja zebrała 7708 podpisów."), article)).toEqual([expect.stringContaining("7708")]);
+  expect(unsupportedNumericClaims(brief("Wartość wynosi 7,707."), article)).toEqual([expect.stringContaining("7.707")]);
+});
+
+it("does not reinterpret a Polish decimal comma as a thousands separator", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Wynik wynosi 7,707 metra, a wartość pomiaru jest dokładna.";
+  expect(unsupportedNumericClaims(brief("Wynik to 7,707 metra."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Wynik to 7707 metrów."), article)).toEqual([expect.stringContaining("7707")]);
+});
+
+it("recognizes exact dozen expressions without treating dozens as an exact count", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The British ministry is inviting up to a dozen companies to submit proposals for the platform.";
+  expect(unsupportedNumericClaims(brief("Resort zaprasza do 12 firm."), article)).toEqual([]);
+  article.articles[0].sourceMaterials[0].text = "The ministry invited two dozen companies and half a dozen labs.";
+  expect(unsupportedNumericClaims(brief("Zaproszono 24 firmy i 6 laboratoriów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Zaproszono 12 firm."), article)).toEqual([expect.stringContaining("12")]);
+  article.articles[0].sourceMaterials[0].text = "The ministry invited dozens of companies to the platform.";
+  expect(unsupportedNumericClaims(brief("Zaproszono 12 firm."), article)).toEqual([expect.stringContaining("12")]);
+});
+
+it("interprets grouped numbers in titles in the same source context as the body", () => {
+  const article = structuredClone(input);
+  article.articles[0].title = "7,707 signatures";
+  article.articles[0].sourceMaterials[0].title = "7,707 signatures";
+  article.articles[0].sourceMaterials[0].text = "The petition from the residents gathered more than 7,707 signatures for the protest.";
+  expect(unsupportedNumericClaims(brief("Zebrano 7707 podpisów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Wartość wynosi 7,707."), article)).toEqual([expect.stringContaining("7.707")]);
+});
