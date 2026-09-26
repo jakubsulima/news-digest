@@ -117,3 +117,18 @@ it("interprets grouped numbers in titles in the same source context as the body"
   expect(unsupportedNumericClaims(brief("Zebrano 7707 podpisów."), article)).toEqual([]);
   expect(unsupportedNumericClaims(brief("Wartość wynosi 7,707."), article)).toEqual([expect.stringContaining("7.707")]);
 });
+
+it("compares full quantities when a briefing uses thousands or millions", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The projections from the researchers show 451,000 deaths and 66,800 in the region, with 50,000 stars and 3.29 million downloads.";
+  expect(unsupportedNumericClaims(brief("Prognoza wynosi 451 tys. i 66,8 tys. zgonów; projekt ma 50 tys. gwiazdek oraz 3,29 mln pobrań."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Prognoza wynosi 451 mln zgonów."), article)).toEqual([expect.stringContaining("451000000")]);
+  expect(unsupportedNumericClaims(brief("Projekt ma 50 gwiazdek."), article)).toEqual([expect.stringContaining("50")]);
+});
+
+it("does not let an equal coefficient conceal a thousand-fold magnitude error", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The company has $8.2 million in revenue.";
+  expect(unsupportedNumericClaims(brief("Przychód to 8,2 mln dolarów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Przychód to 8,2 mld dolarów."), article)).toEqual([expect.stringContaining("8200000000")]);
+});

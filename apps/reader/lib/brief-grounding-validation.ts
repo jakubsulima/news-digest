@@ -29,7 +29,13 @@ function numericValues(text: string, source = false) {
   // Some upstream extractors insert a space inside decimal numbers and model versions.
   const normalized = withoutTimes
     .replace(/(?<![\d.,])\b\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?!\d)/gu, (value) => value.replace(/\s/gu, ""))
-    .replace(/\b(\d{1,3})\.\s+(\d{1,3})\b/gu, "$1.$2");
+    .replace(/\b(\d{1,3})\.\s+(\d{1,3})\b/gu, "$1.$2")
+    .replace(/(\d+(?:[.,]\d+)?)\s*(thousand|million|billion|trillion|tys|mln|mld|bn|mn)\b\.?/giu,
+      (_, coefficient: string, unit: string) => {
+        const scale: Record<string, number> = { thousand: 1e3, tys: 1e3, million: 1e6, mln: 1e6, mn: 1e6,
+          billion: 1e9, mld: 1e9, bn: 1e9, trillion: 1e12 };
+        return String(Number((Number(coefficient.replace(",", ".")) * scale[unit.toLowerCase()]).toPrecision(15)));
+      });
   const values = new Set([...times, ...[...normalized.matchAll(/\d+(?:[.,]\d+)?/gu)]
     .map((match) => String(Number(match[0].replace(",", "."))))]);
   for (const match of normalized.matchAll(/\b(?:19|20)(\d)0s\b/giu)) values.add(String(Number(match[1]) * 10));
