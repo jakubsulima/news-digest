@@ -50,10 +50,11 @@ it("keeps a complete briefing when lead links and full-section count miss editor
   expect(parsed.report.warnings).toContain("Aim for at least 8 full sections.");
 });
 
-it("still rejects a briefing with too few developed sections", () => {
+it("keeps complete coverage even when too few sections meet the editorial target", () => {
   const response = rawBrief(20);
   response.sections.slice(3, 8).forEach((section) => { section.kind = "short"; });
-  expect(parseLunaBrief(response, 20).report.hardErrors).toContain("At least 4 sections must be full.");
+  expect(parseLunaBrief(response, 20).report.valid).toBe(true);
+  expect(parseLunaBrief(response, 20).report.warnings).toContain("Aim for at least 8 full sections.");
 });
 
 it("uses Responses structured output, preserves source text and records token usage", async () => {
@@ -71,6 +72,18 @@ it("uses Responses structured output, preserves source text and records token us
   expect(request.input).toContain("Source 19");
   expect(result.status).toBe("generated");
   expect(result.metrics).toMatchObject({ inputTokens: 10_000, outputTokens: 4_000, reasoningTokens: 500, estimatedCostUsd: 0.003 });
+});
+
+it("uses the frozen model and avoids Luna cost estimates for another model", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", usage: { input_tokens: 10_000, output_tokens: 4_000 },
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(rawBrief(20)) }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubEnv("DIGEST_BRIEF_OPENAI_MODEL", "gpt-6-luna");
+  const result = await generateDigestBriefWithLuna({ input: { ...input, model: "gpt-future" }, timeoutMs: 5_000 });
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe("gpt-future");
+  expect(result).toMatchObject({ model: "gpt-future", status: "generated", metrics: { estimatedCostUsd: null } });
 });
 
 it("rejects a generated section that assigns Haiku's price to Opus", async () => {
@@ -117,4 +130,82 @@ it("stops retrying after a model refusal", async () => {
   }) }));
   const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5_000 });
   expect(result).toMatchObject({ status: "terminal_failure", errorCode: "openai_refusal" });
+});
+
+
+it("accepts concise source-backed coverage without padding every story to a word quota", () => {
+  const response = rawBrief(20);
+  response.sections.forEach(section => { section.text = sentence; });
+  response.highlights = [];
+  const parsed = parseLunaBrief(response, 20);
+  expect(parsed.report.valid).toBe(true);
+  expect(parsed.report.warnings).toContain("Target length is 1100–1600 words.");
+  expect(parsed.report.warnings).toContain("Section 0 is shorter than intended.");
+});
+
+it("still rejects empty sections, duplicate stories and invalid references", () => {
+  const empty = rawBrief(20);
+  empty.sections[0].text = " ";
+  expect(parseLunaBrief(empty, 20).report.valid).toBe(false);
+  const duplicate = rawBrief(20);
+  duplicate.sections[19].articleIndex = 0;
+  expect(parseLunaBrief(duplicate, 20).report.valid).toBe(false);
+  const wrongReference = rawBrief(20);
+  wrongReference.highlights[0].articleIndex = 20;
+  expect(parseLunaBrief(wrongReference, 20).report.valid).toBe(false);
+});
+
+
+it("sends the same evidence used by validation instead of conflicting feed summaries", async () => {
+  const conflicting = structuredClone(input);
+  conflicting.articles[0].summary = "UNTRUSTED_SUMMARY with 999 contracts.";
+  conflicting.articles[0].publishedAt = "2026-09-26T00:00:00Z";
+  conflicting.articles[0].sourceMaterials.push({ ...conflicting.articles[0].sourceMaterials[0], contentMode: "feed_only", text: "UNTRUSTED_FEED with 998 contracts." });
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+  vi.stubGlobal("fetch", fetchMock);
+  await generateDigestBriefWithLuna({ input: conflicting, timeoutMs: 5000 });
+  const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).input;
+  expect(prompt).not.toContain("UNTRUSTED_SUMMARY");
+  expect(prompt).not.toContain("UNTRUSTED_FEED");
+  expect(prompt).not.toContain("2026-09-26T00:00:00Z");
+  expect(prompt).toContain(prose);
+});
+
+it("identifies output truncation so retries can request more space without shortening the brief", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+    output: [{ type: "message", content: [{ type: "output_text", text: '{"summary":' }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000 });
+  expect(result).toMatchObject({ status: "retryable_failure", errorCode: "openai_output_limit" });
+});
+
+it("respects the provider's retry interval on rate limiting", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 429,
+    headers: new Headers({ "retry-after": "180" }), json: async () => ({ error: { code: "rate_limit_exceeded" } }) }));
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000 });
+  expect(result).toMatchObject({ status: "retryable_failure", retryAfterMs: 180000 });
+});
+
+it("increases the output budget only after confirmed truncation and still validates the whole response", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(rawBrief(20)) }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000, attempt: 2, previousErrorCode: "openai_output_limit" });
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body).max_output_tokens).toBe(10500);
+  expect(result.status).toBe("generated");
+  await generateDigestBriefWithLuna({ input, timeoutMs: 5000, attempt: 3, previousErrorCode: "openai_output_limit" });
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body).max_output_tokens).toBe(14000);
+  await generateDigestBriefWithLuna({ input, timeoutMs: 5000, attempt: 2, previousErrorCode: "openai_timeout" });
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body).max_output_tokens).toBe(7000);
+});
+
+it("never publishes filtered output or a partial response even when its JSON is valid", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "incomplete", incomplete_details: { reason: "content_filter" },
+    output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(rawBrief(20)) }] }],
+  }) }));
+  expect(await generateDigestBriefWithLuna({ input, timeoutMs: 5000 })).toMatchObject({ status: "terminal_failure", errorCode: "openai_content_filter" });
 });

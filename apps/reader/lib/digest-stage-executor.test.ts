@@ -152,6 +152,37 @@ describe("advanceDigestRun", () => {
     expect(state.runStageForRun).not.toHaveBeenCalled();
   });
 
+  it("does not fail a run after an old worker loses its lease", async () => {
+    const claimed = stage({ stage_name: "ai_brief", lease_token: "old-lease", attempt_count: 1 });
+    state.getDigestRunById.mockResolvedValue(run({ metadata: { pipelineVersion: 2 }, status: "running" }));
+    state.rpc.mockImplementation(async name => ({ data: name === "claim_next_digest_stage" ? claimed : false, error: null }));
+    state.runStageForRun.mockRejectedValue(new Error("lease_lost"));
+    const { advanceDigestRun } = await import("./digest-stage-executor");
+    expect((await advanceDigestRun("run-1")).status).toBe("running");
+    expect(state.operations).toHaveLength(0);
+  });
+
+  it("requeues an AI checkpoint failure so its saved candidate can be recovered", async () => {
+    const claimed = stage({ stage_name: "ai_brief", lease_token: "lease", attempt_count: 1 });
+    state.getDigestRunById.mockResolvedValue(run({ metadata: { pipelineVersion: 2 }, status: "running" }));
+    state.rpc.mockImplementation(async name => ({ data: name === "claim_next_digest_stage" ? claimed : true, error: null }));
+    state.runStageForRun.mockRejectedValue(new Error("temporary database failure"));
+    const { advanceDigestRun } = await import("./digest-stage-executor");
+    expect((await advanceDigestRun("run-1")).status).toBe("running");
+    expect(state.rpc).toHaveBeenCalledWith("finish_digest_stage", expect.objectContaining({ p_status: "queued", p_lease_token: "lease" }));
+    expect(state.operations).toHaveLength(0);
+  });
+
+  it("leaves recovery to the watchdog when the checkpoint result is uncertain", async () => {
+    const claimed = stage({ stage_name: "ai_brief", lease_token: "lease", attempt_count: 1 });
+    state.getDigestRunById.mockResolvedValue(run({ metadata: { pipelineVersion: 2 }, status: "running" }));
+    state.rpc.mockImplementation(async name => name === "claim_next_digest_stage" ? { data: claimed, error: null } : { data: null, error: { message: "network error" } });
+    state.runStageForRun.mockRejectedValue(new Error("temporary database failure"));
+    const { advanceDigestRun } = await import("./digest-stage-executor");
+    await advanceDigestRun("run-1");
+    expect(state.operations).toHaveLength(0);
+  });
+
   it("does not claim a fresh running stage again", async () => {
     const running = stage({
       started_at: "2026-06-19T09:59:00.000Z",

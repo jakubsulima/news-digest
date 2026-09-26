@@ -46,3 +46,22 @@ it("keeps model prices with their paragraph and model name", () => {
   expect(text).not.toContain("Opus 5. 5");
   expect(text.length).toBeLessThanOrEqual(1_350);
 });
+
+it("prefers available full text when the canonical article has only a feed summary", () => {
+  const sources = briefSourceMaterials({ canonicalArticleId: "a", articleIds: ["a", "b", "c"] }, new Map([
+    ["a", article("a", "Publisher", "insufficient_text")],
+    ["b", article("b", "Publisher", "readable")],
+    ["c", article("c", "Other", "insufficient_text")],
+  ]));
+  expect(sources[0]).toMatchObject({ contentMode: "readable", url: "https://example.com/b" });
+  expect(sources[0].text).toContain("harmonogram");
+  expect(sources[1].source).toBe("Other");
+});
+
+it("does not mistake whitespace-only extraction for full text", () => {
+  const empty = { ...article("a", "Publisher", "readable"), enriched_text: "  \n " };
+  const sources = briefSourceMaterials({ canonicalArticleId: "a", articleIds: ["a", "b"] }, new Map([
+    ["a", empty], ["b", article("b", "Other", "readable")],
+  ]));
+  expect(sources[0]).toMatchObject({ contentMode: "readable", source: "Other" });
+});

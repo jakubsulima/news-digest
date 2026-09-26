@@ -44,10 +44,10 @@ function excerpt(value: string, title: string, maxChars: number) {
 
 export function briefSourceMaterials(metadata: Json, articles: Map<string, BriefArticleSourceRow>): BriefSourceMaterial[] {
   const candidates = briefArticleIds(metadata).flatMap((id) => articles.get(id) ? [articles.get(id)!] : []);
-  const primary = candidates[0];
+  const hasReadableText = (article: BriefArticleSourceRow) => article.content_mode === "readable" && Boolean(article.enriched_text?.trim());
+  const primary = candidates.find(hasReadableText) || candidates[0];
   const secondary = candidates.filter((article) => article.source.trim().toLowerCase() !== primary?.source.trim().toLowerCase())
-    .sort((left, right) => Number(right.content_mode === "readable" && Boolean(right.enriched_text))
-      - Number(left.content_mode === "readable" && Boolean(left.enriched_text)))[0];
+    .sort((left, right) => Number(hasReadableText(right)) - Number(hasReadableText(left)))[0];
   const selected: BriefArticleSourceRow[] = [primary, secondary].filter((article): article is BriefArticleSourceRow => Boolean(article));
   return selected.map((article, index) => {
     const readable = article.content_mode === "readable" && Boolean(article.enriched_text?.trim());

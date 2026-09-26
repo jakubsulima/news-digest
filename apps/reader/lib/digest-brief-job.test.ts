@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fallbackDigestBrief } from "./ai-summary";
 import { buildBriefInput, buildBriefInputV2, materializeBrief } from "./digest-brief-job";
@@ -13,6 +13,8 @@ const article = (index: number, status: string = "full_text") => ({
   sourceCount: 1, storyClusterId: `cluster-${index}`, summary: `Summary ${index}`,
   title: `Title ${index}`, whyInteresting: null,
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("frozen digest brief input", () => {
   it("is canonical, bounded and keeps stable references", () => {
@@ -78,4 +80,16 @@ it("freezes up to 20 Luna stories with source text and a stable hash", () => {
   expect(first.payload.omitted.overLimit).toBe(2);
   expect(first.payload.articles[0].sourceMaterials[0].text).toBe("Detailed fact 0");
   expect(first.hash).toBe(freeze([...articles].reverse()).hash);
+});
+
+it("freezes the configured OpenAI model into new jobs", () => {
+  const input = { articles: [{ ...article(0), sourceMaterials: [] }],
+    interestProfile: { feedTargets: {}, preferredKeywords: [] }, omitted: { insufficientEvidence: 0, overLimit: 0 } };
+  vi.stubEnv("DIGEST_BRIEF_OPENAI_MODEL", "  gpt-future  ");
+  const configured = buildBriefInputV2(input);
+  vi.stubEnv("DIGEST_BRIEF_OPENAI_MODEL", "gpt-6-luna");
+  const defaultModel = buildBriefInputV2(input);
+  expect(configured.payload.model).toBe("gpt-future");
+  expect(configured.hash).not.toBe(defaultModel.hash);
+  expect(defaultModel.payload.model).toBe("gpt-6-luna");
 });
