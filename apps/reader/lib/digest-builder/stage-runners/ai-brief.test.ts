@@ -59,3 +59,13 @@ it("routes a frozen V2 job to Luna and keeps its recorded model", async () => {
   expect(mocks.generate).not.toHaveBeenCalled();
   expect(result.metrics).toMatchObject({ model: "gpt-6-luna", inputTokens: 100, outputTokens: 200 });
 });
+
+
+it("prioritizes blocking errors over long editorial warnings when repairing a Luna response", async () => {
+  const query = mocks.from();
+  query.single.mockResolvedValue({ data: { input_payload: { ...input, version: 2, provider: "openai", model: "gpt-6-luna" }, status: "retry_wait",
+    validation_report: { warnings: ["Editorial warning. ".repeat(100)], hardErrors: ["Section 8 has an unsupported number."], valid: false } }, error: null });
+  mocks.generateLuna.mockResolvedValue({ brief: fallbackDigestBrief([]), model: "gpt-6-luna", status: "retryable_failure", errorCode: "openai_invalid_brief" });
+  await runAiBriefStage(context());
+  expect(mocks.generateLuna.mock.calls[0][0].repairInstructions).toBe("Section 8 has an unsupported number.");
+});

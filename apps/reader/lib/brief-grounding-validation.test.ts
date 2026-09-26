@@ -65,3 +65,20 @@ it("handles noon, midnight and AM/PM without minutes in either direction", () =>
   article.articles[0].sourceMaterials[0].text = "The window starts at 22:00.";
   expect(unsupportedNumericClaims(brief("Start: 10:00 p.m."), article)).toEqual([]);
 });
+
+
+it("keeps comma-separated quantities separate instead of inventing a decimal", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The groups signed 12, 13 and 14 contracts.";
+  expect(unsupportedNumericClaims(brief("Grupy podpisały odpowiednio 12 oraz 13 umów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Wartość wynosi 12,13."), article)).toEqual([expect.stringContaining("12.13")]);
+});
+
+it("normalizes space-grouped thousands without merging ordinary lists", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "There are 1500 contracts worth 1250000 dollars.";
+  expect(unsupportedNumericClaims(brief("Jest 1 500 umów o wartości 1\u202f250\u00a0000 dolarów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Jest 1 501 umów."), article)).toEqual([expect.stringContaining("1501")]);
+  article.articles[0].sourceMaterials[0].text = "There are 1 500 contracts.";
+  expect(unsupportedNumericClaims(brief("Jest 1500 umów."), article)).toEqual([]);
+});

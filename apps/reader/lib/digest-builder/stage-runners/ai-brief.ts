@@ -34,8 +34,13 @@ export const runAiBriefStage: StageRunner = async ({ digestRunId, stage, deadlin
   const started = await rpc("start_digest_brief_attempt", { p_run_id: digestRunId, p_lease_token: leaseToken });
   if (started.error || !started.data) throw started.error || new Error("AI job could not start.");
   const attempt = started.data.generation_attempt_count;
+  const previousReport = job.validation_report;
+  const repairInstructions = previousReport && typeof previousReport === "object" && !Array.isArray(previousReport)
+    && Array.isArray(previousReport.hardErrors)
+    ? previousReport.hardErrors.filter((error): error is string => typeof error === "string").map(error => error.slice(0, 240)).join("\n")
+    : undefined;
   const generation = input.version === 2 && input.provider === "openai"
-    ? await generateDigestBriefWithLuna({ input, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, timeoutMs: Math.min(60_000, remainingMs) })
+    ? await generateDigestBriefWithLuna({ input, repairInstructions, timeoutMs: Math.min(60_000, remainingMs) })
     : await generateDigestBriefWithNvidia({ articles: input.articles, attempt, repairInstructions: job.validation_report ? JSON.stringify(job.validation_report) : undefined, interestProfile: input.interestProfile, timeoutMs: Math.min(60_000, remainingMs) });
 
   const report = generation.validationReport ?? { valid: false, hardErrors: [generation.errorCode || "generation_failed"], warnings: [] };

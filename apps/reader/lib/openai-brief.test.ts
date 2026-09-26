@@ -50,10 +50,11 @@ it("keeps a complete briefing when lead links and full-section count miss editor
   expect(parsed.report.warnings).toContain("Aim for at least 8 full sections.");
 });
 
-it("still rejects a briefing with too few developed sections", () => {
+it("keeps complete coverage even when too few sections meet the editorial target", () => {
   const response = rawBrief(20);
   response.sections.slice(3, 8).forEach((section) => { section.kind = "short"; });
-  expect(parseLunaBrief(response, 20).report.hardErrors).toContain("At least 4 sections must be full.");
+  expect(parseLunaBrief(response, 20).report.valid).toBe(true);
+  expect(parseLunaBrief(response, 20).report.warnings).toContain("Aim for at least 8 full sections.");
 });
 
 it("uses Responses structured output, preserves source text and records token usage", async () => {
@@ -129,4 +130,43 @@ it("stops retrying after a model refusal", async () => {
   }) }));
   const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5_000 });
   expect(result).toMatchObject({ status: "terminal_failure", errorCode: "openai_refusal" });
+});
+
+
+it("accepts concise source-backed coverage without padding every story to a word quota", () => {
+  const response = rawBrief(20);
+  response.sections.forEach(section => { section.text = sentence; });
+  response.highlights = [];
+  const parsed = parseLunaBrief(response, 20);
+  expect(parsed.report.valid).toBe(true);
+  expect(parsed.report.warnings).toContain("Target length is 1100–1600 words.");
+  expect(parsed.report.warnings).toContain("Section 0 is shorter than intended.");
+});
+
+it("still rejects empty sections, duplicate stories and invalid references", () => {
+  const empty = rawBrief(20);
+  empty.sections[0].text = " ";
+  expect(parseLunaBrief(empty, 20).report.valid).toBe(false);
+  const duplicate = rawBrief(20);
+  duplicate.sections[19].articleIndex = 0;
+  expect(parseLunaBrief(duplicate, 20).report.valid).toBe(false);
+  const wrongReference = rawBrief(20);
+  wrongReference.highlights[0].articleIndex = 20;
+  expect(parseLunaBrief(wrongReference, 20).report.valid).toBe(false);
+});
+
+
+it("sends the same evidence used by validation instead of conflicting feed summaries", async () => {
+  const conflicting = structuredClone(input);
+  conflicting.articles[0].summary = "UNTRUSTED_SUMMARY with 999 contracts.";
+  conflicting.articles[0].publishedAt = "2026-09-26T00:00:00Z";
+  conflicting.articles[0].sourceMaterials.push({ ...conflicting.articles[0].sourceMaterials[0], contentMode: "feed_only", text: "UNTRUSTED_FEED with 998 contracts." });
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+  vi.stubGlobal("fetch", fetchMock);
+  await generateDigestBriefWithLuna({ input: conflicting, timeoutMs: 5000 });
+  const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).input;
+  expect(prompt).not.toContain("UNTRUSTED_SUMMARY");
+  expect(prompt).not.toContain("UNTRUSTED_FEED");
+  expect(prompt).not.toContain("2026-09-26T00:00:00Z");
+  expect(prompt).toContain(prose);
 });
