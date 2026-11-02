@@ -110,6 +110,22 @@ it("rejects an unsupported quantity before saving the candidate", async () => {
   expect(result.validationReport?.hardErrors).toContainEqual(expect.stringContaining("numbers absent from its cited sources: 13"));
 });
 
+it("accepts complete production-style output with translated hyphenated amounts and model sizes", async () => {
+  const productionInput = structuredClone(input);
+  productionInput.articles[5].sourceMaterials[0].text = "In May, he put on hold a $14-billion arms deal. The deal remains under review.";
+  productionInput.articles[6].sourceMaterials[0].text = "A 70B parameter model loads in 37 seconds and an 8B model in 15 seconds.";
+  const response = rawBrief(20);
+  response.sections[5].text = "Wstrzymano umowę zbrojeniową wartą 14 mld dolarów. Umowa pozostaje w trakcie przeglądu.";
+  response.sections[6].text = "Model o 70 mld parametrów ładuje się w 37 sekund, a model o 8 mld w 15 sekund.";
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(response) }] }],
+  }) }));
+  const result = await generateDigestBriefWithLuna({ input: productionInput, timeoutMs: 5000 });
+  expect(result.status).toBe("generated");
+  expect(result.validationReport?.hardErrors).toEqual([]);
+  expect(result.brief.sections).toHaveLength(20);
+});
+
 it("fails without a key without sending article text", async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
   const fetchMock = vi.fn();

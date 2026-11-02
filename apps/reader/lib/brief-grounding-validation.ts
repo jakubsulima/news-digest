@@ -6,6 +6,7 @@ function numericValues(text: string, source = false) {
   // Be conservative for old frozen inputs without a language tag: recognize
   // comma grouping only in clearly English prose, never in Polish output.
   const englishMarkers = new Set(text.toLowerCase().match(/\b(?:the|of|to|and|with|for|from|than)\b/gu) || []);
+  const polishMarkers = new Set(text.toLowerCase().match(/(?<!\p{L})(?:oraz|jest|wynosi|który|które|się|przez|państwa|budżetu|wonów)(?!\p{L})/gu) || []);
   const englishGrouping = source && englishMarkers.size >= 3 && !/\b(?:oraz|jest|wynosi|który|które|się)\b/iu.test(text);
   if (englishGrouping) {
     text = text.replace(/(?<![\d.,])\b\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])/gu, value => value.replace(/,/gu, ""));
@@ -15,6 +16,7 @@ function numericValues(text: string, source = false) {
     text = text.replace(/\b(half a|a|one|two|three) dozen\b/giu, (_, count: string) => String(dozens[count.toLowerCase()]));
   }
   const times = new Set<string>();
+  const suffixedValues = new Set<string>();
   // Compare whole clock times, not their hour/minute fragments. A translation
   // from 10:00 p.m. to 22:00 must not authorize an unrelated quantity of 22.
   const withoutTimes = text.replace(/\b(\d{1,2})(?::([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?|(\s*(?:a\.?m\.?|p\.?m\.?)))(?!\w)/giu,
@@ -30,13 +32,34 @@ function numericValues(text: string, source = false) {
   const normalized = withoutTimes
     .replace(/(?<![\d.,])\b\d{1,3}(?:[ \u00a0\u202f]\d{3})+(?!\d)/gu, (value) => value.replace(/\s/gu, ""))
     .replace(/\b(\d{1,3})\.\s+(\d{1,3})\b/gu, "$1.$2")
-    .replace(/(\d+(?:[.,]\d+)?)\s*(thousand|million|billion|trillion|tys|mln|mld|bn|mn)\b\.?/giu,
+    // Financial sources abbreviate millions as $1.4m. Require a currency
+    // symbol so a measurement such as 1.4m cannot authorize 1.4 million.
+    .replace(/([$£€])\s*(\d+(?:[.,]\d+)?)\s*m\b/giu, "$1$2 million")
+    .replace(/([$£€])\s*(\d+(?:[.,]\d+)?)\s*tn\b/giu, "$1$2 trillion")
+    // B is ambiguous (bytes, part numbers). Expand it only when the adjacent
+    // wording explicitly describes a model or its parameter count.
+    .replace(/\b(\d+(?:[.,]\d+)?)B\b/gu, (match, coefficient: string, offset: number, fullText: string) => {
+      const modelSize = /^[\s\u2010\u2011-]+(?:parameters?|model)\b/u.test(fullText.slice(offset + match.length));
+      // Preserve exact shorthand as a distinct value too; copying "70B" must
+      // not authorize a bare count of 70 or turn arbitrary bytes into billions.
+      if (source || !modelSize) suffixedValues.add(`B:${Number(coefficient.replace(",", "."))}`);
+      return modelSize ? `${coefficient} billion` : " ";
+    })
+    .replace(/(\d+(?:[.,]\d+)?)\s*(milion|miliard|bilion)(?:a|y|ów|owi|om|em|ach|ami)?(?![\p{L}\p{N}_])/giu,
+      (_, coefficient: string, unit: string) => `${coefficient} ${{ milion: "million", miliard: "billion", bilion: "trillion" }[unit.toLowerCase()]}`)
+    .replace(/(\d+(?:[.,]\d+)?)\s*(?:tysiąc(?:a|e|owi|em|om|ach|ami)?|tysięcy)(?![\p{L}\p{N}_])/giu, "$1 thousand")
+    // Output is Polish. Frozen sources can also be Polish, where bln means
+    // trillion; require language evidence because English bln means billion.
+    .replace(/(\d+(?:[.,]\d+)?)\s*bln\b\.?/giu,
+      (match, coefficient: string) => source && polishMarkers.size < 2 ? match : `${coefficient} trillion`)
+    // English attributive amounts use a hyphen: a $14-billion arms deal.
+    .replace(/(\d+(?:[.,]\d+)?)[\s\u2010\u2011-]*(thousand|million|billion|trillion|tys|mln|mld|bn|mn)\b\.?/giu,
       (_, coefficient: string, unit: string) => {
         const scale: Record<string, number> = { thousand: 1e3, tys: 1e3, million: 1e6, mln: 1e6, mn: 1e6,
           billion: 1e9, mld: 1e9, bn: 1e9, trillion: 1e12 };
         return String(Number((Number(coefficient.replace(",", ".")) * scale[unit.toLowerCase()]).toPrecision(15)));
       });
-  const values = new Set([...times, ...[...normalized.matchAll(/\d+(?:[.,]\d+)?/gu)]
+  const values = new Set([...times, ...suffixedValues, ...[...normalized.matchAll(/\d+(?:[.,]\d+)?/gu)]
     .map((match) => String(Number(match[0].replace(",", "."))))]);
   for (const match of normalized.matchAll(/\b(?:19|20)(\d)0s\b/giu)) values.add(String(Number(match[1]) * 10));
   return values;
