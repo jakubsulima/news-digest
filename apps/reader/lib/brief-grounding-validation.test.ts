@@ -19,6 +19,91 @@ function brief(text: string): NvidiaDigestBrief {
     sections: [{ category: "business", title: "Acme", paragraphs: [{ articleIndexes: [0], text }] }] };
 }
 
+it("accepts Polish bln in the production Korean budget source", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Prezydent Korei Południowej przedstawił projekt budżetu w wysokości 820,9 bln wonów. Z kolei 4,6 bln wonów wesprze budowę modelu AI. Nakłady na obronność wzrosną do 73,3 bln wonów.";
+  expect(unsupportedNumericClaims(brief("Budżet wynosi 820,9 bln wonów, AI otrzyma 4,6 biliona, a obronność 73,3 bln wonów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Budżet wynosi 820,9 mld wonów."), article)).toEqual([expect.stringContaining("820900000000")]);
+});
+
+it.each(["$", "£", "€"])("recognizes financial tn shorthand after %s", currency => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = `The decline has knocked nearly ${currency}1tn in value off the exchange and erased about ${currency}2tn in a month.`;
+  expect(unsupportedNumericClaims(brief("Giełda straciła 1 bilion w tydzień i 2 bln w miesiąc."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Giełda straciła 1 miliard."), article)).toEqual([expect.stringContaining("1000000000")]);
+});
+
+it.each(["biliona", "bln", "bln."])("accepts the production SpaceX valuation written with %s", unit => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "At current valuations, SpaceX and Tesla rank as the world's seventh- and eleventh-largest companies, respectively, with a combined market capitalisation of about $3.5 trillion.";
+  expect(unsupportedNumericClaims(brief(`SpaceX i Tesla mają łączną kapitalizację około 3,5 ${unit} dolarów.`), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Kapitalizacja wynosi 3,5 miliarda dolarów."), article)).toEqual([expect.stringContaining("3500000000")]);
+});
+
+it.each(["$", "£", "€"])("recognizes the production facility cost written as %s1.4m", currency => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = `Inaugurated in August, the ${currency}1.4m facility aims to modernise India's handloom sector by combining traditional weaving heritage with contemporary technology.`;
+  expect(unsupportedNumericClaims(brief("Placówka kosztuje 1,4 mln."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Placówka kosztuje 1,4 mld."), article)).toEqual([expect.stringContaining("1400000000")]);
+  expect(unsupportedNumericClaims(brief("Placówka kosztuje 1,4."), article)).toEqual([expect.stringContaining("sources: 1.4.")]);
+});
+
+it("does not treat an ambiguous English bln source as confirmation of Polish trillions", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The market value of the company is $3.5 bln.";
+  expect(unsupportedNumericClaims(brief("Kapitalizacja wynosi 3,5 bln dolarów."), article)).toEqual([expect.stringContaining("3500000000000")]);
+});
+
+it("does not interpret a metre suffix as a monetary million", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The textile is 1.4m wide.";
+  expect(unsupportedNumericClaims(brief("Koszt wynosi 1,4 mln dolarów."), article)).toEqual([expect.stringContaining("1400000")]);
+});
+
+it.each(["$14-billion", "$14‐billion", "$14‑billion"])("recognizes the production arms deal amount written as %s", (amount) => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = `In May, he put on hold a ${amount} arms deal. The arms sales deal remains under review.`;
+  expect(unsupportedNumericClaims(brief("Wstrzymano umowę zbrojeniową wartą 14 mld dolarów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Umowa jest warta 14 mln dolarów."), article)).toEqual([expect.stringContaining("14000000")]);
+});
+
+it("recognizes billion-parameter model shorthand from the production GKE article", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Google reports startup latency reductions of 89%, with a 70B parameter model loading in 37 seconds and an 8B model in 15 seconds.";
+  expect(unsupportedNumericClaims(brief("Model o 70 mld parametrów startuje w 37 sekund, a model o 8 mld w 15 sekund."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Model ma 70 mln parametrów."), article)).toEqual([expect.stringContaining("70000000")]);
+  expect(unsupportedNumericClaims(brief("Model ma 70 miliardów parametrów, a drugi 8 miliardów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Modele 70B i 8B uruchamiają się w 37 i 15 sekund."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Uruchomiono 70 modeli i 8 maszyn."), article)).toEqual([expect.stringContaining("70, 8")]);
+});
+
+it.each([["tysięcy", "thousand"], ["tysiące", "thousand"], ["tysiącach", "thousand"], ["miliardów", "billion"], ["bilionów", "trillion"]])("normalizes %s in sources and output", (polish, english) => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = `The figure is 8 ${english}.`;
+  expect(unsupportedNumericClaims(brief(`Wartość: 8 ${polish}.`), article)).toEqual([]);
+  article.articles[0].sourceMaterials[0].text = `Wartość: 8 ${polish}.`;
+  expect(unsupportedNumericClaims(brief(`Wartość: 8 ${english}.`), article)).toEqual([]);
+});
+
+it.each(["milion", "miliona", "miliony", "milionów", "milionach", "milionami"])("normalizes the Polish unit %s without dropping its magnitude", unit => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The figure is 8.2 million.";
+  expect(unsupportedNumericClaims(brief(`Wartość: 8,2 ${unit}.`), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Wartość: 8,2 miliarda."), article)).toEqual([expect.stringContaining("8200000000")]);
+});
+
+it("does not interpret bytes or model identifiers as billions", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The packet has 70B of data. The machine is B70 and the part is 8B.";
+  expect(unsupportedNumericClaims(brief("Model ma 70 mld parametrów oraz 8 mld parametrów."), article)).toEqual([expect.stringContaining("70000000000, 8000000000")]);
+});
+
+it("still rejects a derived total absent from the production tariff source", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The two countries reached consensus on more favourable tariff treatment for $30 billion of non-sensitive goods in each direction.";
+  expect(unsupportedNumericClaims(brief("Porozumienie dotyczy towarów za 60 mld dolarów."), article)).toEqual([expect.stringContaining("60000000000")]);
+});
+
 it("rejects a new quantity that is absent from the cited story", () => {
   expect(unsupportedNumericClaims(brief("Acme podpisała 13 nowych umów."), input))
     .toEqual([expect.stringContaining("numbers absent from its cited sources: 13")]);
