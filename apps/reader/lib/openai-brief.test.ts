@@ -126,6 +126,32 @@ it("accepts complete production-style output with translated hyphenated amounts 
   expect(result.brief.sections).toHaveLength(20);
 });
 
+it("accepts production publisher attribution and dotted AM times before saving the briefing", async () => {
+  const productionInput = structuredClone(input);
+  productionInput.articles[18].source = "France 24 English";
+  productionInput.articles[18].sourceMaterials[0] = {
+    ...productionInput.articles[18].sourceMaterials[0], source: "France 24 English",
+    text: "Jensen Huang has resigned as Nvidia's President, CEO and board member.",
+  };
+  productionInput.articles[12].sourceMaterials[0].text = "As of 3.30am GMT on Friday, Microsoft said its Exchange services were being most affected.";
+  const response = rawBrief(20);
+  response.sections[18].text = "France 24 informuje o rezygnacji Jensena Huanga ze stanowisk w Nvidii.";
+  response.sections[12].text = "Microsoft o 03:30 GMT potwierdził problemy z usługami Exchange.";
+  response.summary = response.sections[18].text;
+  response.summaryArticleIndexes = [18];
+  response.highlights = [{ articleIndex: 18, whatHappened: response.summary, whyItMatters: "France 24 opisuje zmianę kierownictwa Nvidii." }];
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(response) }] }],
+  }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await generateDigestBriefWithLuna({ input: productionInput, timeoutMs: 5_000 });
+  expect(result.status).toBe("generated");
+  expect(result.validationReport?.hardErrors).toEqual([]);
+  expect(result.brief.sections).toHaveLength(20);
+  expect(result.brief.summary).toBe(response.summary);
+  expect(fetchMock).toHaveBeenCalledOnce();
+});
+
 it("fails without a key without sending article text", async () => {
   vi.stubEnv("OPENAI_API_KEY", "");
   const fetchMock = vi.fn();

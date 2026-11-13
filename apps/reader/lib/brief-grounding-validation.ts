@@ -17,6 +17,9 @@ function numericValues(text: string, source = false) {
   }
   const times = new Set<string>();
   const suffixedValues = new Set<string>();
+  // English publishers also write 3.30am. Require AM/PM so an ordinary
+  // decimal such as 3.30 seconds can never authorize a clock time.
+  text = text.replace(/\b(\d{1,2})\.([0-5]\d)(?=\s*[ap]\.?m\.?(?!\w))/giu, "$1:$2");
   // Compare whole clock times, not their hour/minute fragments. A translation
   // from 10:00 p.m. to 22:00 must not authorize an unrelated quantity of 22.
   const withoutTimes = text.replace(/\b(\d{1,2})(?::([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?|(\s*(?:a\.?m\.?|p\.?m\.?)))(?!\w)/giu,
@@ -69,14 +72,25 @@ export function unsupportedNumericClaims(brief: NvidiaDigestBrief, input: BriefI
   const errors: string[] = [];
   const check = (text: string, articleIndexes: number[], label: string) => {
     const articles = [...new Set(articleIndexes)].flatMap((index) => input.articles[index] ? [input.articles[index]] : []);
+    // A publisher's numeric brand is attribution, not a factual quantity.
+    // Match only cited publishers, including the name without its English
+    // edition label. Strip the whole name on both sides rather than allowing
+    // its digits as unrelated counts in the briefing.
+    const publishers = [...new Set(articles.flatMap(article => [article.source, ...article.sourceMaterials.map(material => material.source)])
+      .flatMap(name => [name.trim(), name.trim().replace(/\s+English$/iu, "")])
+      .filter(name => /\d/u.test(name)))].sort((a, b) => b.length - a.length);
+    const publisherPattern = publishers.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${publishers
+      .map(name => name.split(/\s+/u).map(part => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("\\s+"))
+      .join("|")})(?![\\p{L}\\p{N}])`, "giu") : null;
+    const withoutPublishers = (value: string) => publisherPattern ? value.replace(publisherPattern, " ") : value;
     const sourceTexts = articles.flatMap((article) => {
       const readable = article.sourceMaterials.filter((material) => material.contentMode === "readable");
       const materials = readable.length ? readable : article.sourceMaterials;
       const storyContext = [article.title, ...(readable.length ? [] : [article.summary])].join("\n");
       return materials.length ? materials.map((material) => `${storyContext}\n${material.title}\n${material.text}`) : [storyContext];
     });
-    const sourceValues = new Set(sourceTexts.flatMap(text => [...numericValues(text, true)]));
-    const missing = [...numericValues(text)].filter((value) => !sourceValues.has(value));
+    const sourceValues = new Set(sourceTexts.flatMap(text => [...numericValues(withoutPublishers(text), true)]));
+    const missing = [...numericValues(withoutPublishers(text))].filter((value) => !sourceValues.has(value));
     if (missing.length) errors.push(`${label} contains numbers absent from its cited sources: ${missing.slice(0, 8).join(", ")}.`);
   };
   check(brief.summary, brief.summaryArticleIndexes, "Lead");

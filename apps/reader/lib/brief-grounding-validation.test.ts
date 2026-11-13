@@ -19,6 +19,35 @@ function brief(text: string): NvidiaDigestBrief {
     sections: [{ category: "business", title: "Acme", paragraphs: [{ articleIndexes: [0], text }] }] };
 }
 
+it("accepts the cited France 24 publisher without authorizing an unrelated count of 24", () => {
+  const article = structuredClone(input);
+  article.articles[0].source = "France 24 English";
+  article.articles[0].sourceMaterials[0].source = "France 24 English";
+  article.articles[0].sourceMaterials[0].text = "Jensen Huang has resigned as Nvidia's President, CEO and board member.";
+  expect(unsupportedNumericClaims(brief("France 24 informuje o rezygnacji Jensena Huanga z kierowania Nvidią."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Według France 24 English Jensen Huang zrezygnował."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("France 24 informuje o 24 rezygnacjach."), article)).toEqual([expect.stringContaining("sources: 24")]);
+  expect(unsupportedNumericClaims(brief("France 42 informuje o rezygnacji."), article)).toEqual([expect.stringContaining("sources: 42")]);
+  article.articles[0].sourceMaterials[0].text += " France 24 reported the resignation.";
+  expect(unsupportedNumericClaims(brief("Doszło do 24 rezygnacji."), article)).toEqual([expect.stringContaining("sources: 24")]);
+});
+
+it("does not accept numeric publisher names from an uncited story", () => {
+  const article = structuredClone(input);
+  article.articles.push({ ...structuredClone(article.articles[0]), index: 1, source: "France 24 English" });
+  expect(unsupportedNumericClaims(brief("France 24 potwierdza nowe umowy."), article)).toEqual([expect.stringContaining("sources: 24")]);
+});
+
+it("accepts the production Microsoft outage time written as 3.30am GMT", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "As of 3.30am GMT on Friday, Microsoft said its Exchange services were being most affected.";
+  expect(unsupportedNumericClaims(brief("Microsoft o 03:30 GMT potwierdził problemy z Exchange."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Microsoft potwierdził problemy o 15:30 GMT."), article)).toEqual([expect.stringContaining("time:15:30")]);
+  expect(unsupportedNumericClaims(brief("Microsoft wyłączył 3,3 serwera."), article)).toEqual([expect.stringContaining("sources: 3.3")]);
+  article.articles[0].sourceMaterials[0].text = "The delay was 3.30 seconds.";
+  expect(unsupportedNumericClaims(brief("Awaria zaczęła się o 03:30."), article)).toEqual([expect.stringContaining("time:03:30")]);
+});
+
 it("accepts Polish bln in the production Korean budget source", () => {
   const article = structuredClone(input);
   article.articles[0].sourceMaterials[0].text = "Prezydent Korei Południowej przedstawił projekt budżetu w wysokości 820,9 bln wonów. Z kolei 4,6 bln wonów wesprze budowę modelu AI. Nakłady na obronność wzrosną do 73,3 bln wonów.";
