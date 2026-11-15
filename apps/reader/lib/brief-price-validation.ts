@@ -44,8 +44,12 @@ export function unsupportedModelPriceClaims(brief: NvidiaDigestBrief, input: Bri
   };
   check(brief.summary, brief.summaryArticleIndexes, "Lead");
   brief.highlights.forEach((highlight) => check(`${highlight.whatHappened} ${highlight.whyItMatters}`, [highlight.articleIndex], `Highlight ${highlight.articleIndex}`));
-  brief.sections.forEach((section) => section.paragraphs.forEach((paragraph) =>
-    check(paragraph.text, paragraph.articleIndexes, `Section ${paragraph.articleIndexes.join(",")}`)));
+  brief.sections.forEach((section) => {
+    const indexes = [...new Set(section.paragraphs.flatMap(paragraph => paragraph.articleIndexes))];
+    check(section.title, indexes, `Section ${indexes.join(",")} title`);
+    section.paragraphs.forEach((paragraph) =>
+      check(paragraph.text, paragraph.articleIndexes, `Section ${paragraph.articleIndexes.join(",")}`));
+  });
   brief.watchlist.forEach((item) => check(`${item.signal} ${item.why}`, item.articleIndexes, "Watchlist"));
   return errors;
 }

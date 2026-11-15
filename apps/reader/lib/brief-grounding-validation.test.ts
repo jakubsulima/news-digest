@@ -19,6 +19,30 @@ function brief(text: string): NvidiaDigestBrief {
     sections: [{ category: "business", title: "Acme", paragraphs: [{ articleIndexes: [0], text }] }] };
 }
 
+it.each([["thirteen-year-old", 13], ["twenty-one-year-old", 21], ["one-hundred-year-old", 100]])("recognizes a hyphenated age: %s", (age, count) => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = `The ${age} company announced its expansion.`;
+  expect(unsupportedNumericClaims(brief(`Firma działa od ${count} lat.`), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief(`Firma działa od ${count + 1} lat.`), article)).toEqual([expect.stringContaining(`sources: ${count + 1}`)]);
+  if (count === 21) expect(unsupportedNumericClaims(brief("Firma działa od 1 roku."), article)).toEqual([expect.stringContaining("sources: 1.")]);
+});
+
+it("validates section titles against their own cited story", () => {
+  const value = brief("Acme podpisała nowe umowy.");
+  value.sections[0].title = "Acme podpisała 13 umów";
+  expect(unsupportedNumericClaims(value, input)).toEqual([expect.stringContaining("title contains numbers absent from its cited sources: 13")]);
+  value.sections[0].title = "Acme podpisała 12 umów";
+  expect(unsupportedNumericClaims(value, input)).toEqual([]);
+});
+
+it("preserves the magnitude in a hyphenated English number phrase", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The company signed a twenty-one-million dollar deal.";
+  expect(unsupportedNumericClaims(brief("Firma podpisała umowę wartą 21 mln dolarów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Firma podpisała 21 umów."), article)).toEqual([expect.stringContaining("sources: 21.")]);
+  expect(unsupportedNumericClaims(brief("Firma podpisała umowę wartą 1 mln dolarów."), article)).toEqual([expect.stringContaining("sources: 1000000.")]);
+});
+
 it("accepts the production FAA clock time only with an explicit Polish time marker", () => {
   const article = structuredClone(input);
   article.articles[0].sourceMaterials[0].text = "FAA poinformowała o przywróceniu ruchu tuż po godz. 20.16 czasu wschodnioamerykańskiego, po ponad 4,5 godzinach.";

@@ -11,7 +11,7 @@ const rawBrief = (count: number) => ({
   highlights: [{ articleIndex: 0, whatHappened: sentence, whyItMatters: sentence }],
   sections: Array.from({ length: count }, (_, articleIndex) => ({
     articleIndex, category: "business", kind: articleIndex < 8 ? "full" : "short",
-    title: `Historia ${articleIndex}`, text: articleIndex < 8 ? prose : Array.from({ length: 4 }, () => sentence).join(" "),
+    title: "Inwestycja Acme", text: articleIndex < 8 ? prose : Array.from({ length: 4 }, () => sentence).join(" "),
   })),
   watchlist: [], coverageNote: "Część historii oparto na ograniczonej liczbie źródeł.",
 });
@@ -199,6 +199,25 @@ it("still rejects empty sections, duplicate stories and invalid references", () 
   const wrongReference = rawBrief(20);
   wrongReference.highlights[0].articleIndex = 20;
   expect(parseLunaBrief(wrongReference, 20).report.valid).toBe(false);
+});
+
+it("rejects a watchlist item without a source even when it contains no numbers", () => {
+  const articleIndexes: number[] = [];
+  const response = { ...rawBrief(20), watchlist: [{ articleIndexes, signal: "Oczekiwane przejęcie Acme", why: "Może zmienić rynek." }] };
+  expect(parseLunaBrief(response, 20).report.valid).toBe(false);
+  response.watchlist[0].articleIndexes = [0];
+  expect(parseLunaBrief(response, 20).report.valid).toBe(true);
+});
+
+it("rejects an unsupported number appearing only in the generated section title", async () => {
+  const response = rawBrief(20);
+  response.sections[0].title = "Acme podpisała 999 nowych umów";
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(response) }] }],
+  }) }));
+  const result = await generateDigestBriefWithLuna({ input, timeoutMs: 5000 });
+  expect(result.status).toBe("retryable_failure");
+  expect(result.validationReport?.hardErrors).toContainEqual(expect.stringContaining("title contains numbers absent from its cited sources: 999"));
 });
 
 

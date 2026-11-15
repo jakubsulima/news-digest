@@ -6,7 +6,9 @@ function normalizeEnglishNumberWords(text: string) {
   const small = "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen";
   const tens = "twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety";
   const underHundred = `(?:(?:${tens})(?:[ -]+(?:${small}))?|(?:${small}))`;
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}-])(?:(?:one|two|three|four|five|six|seven|eight|nine) hundred(?: (?:and )?${underHundred})?|${underHundred})(?![\\p{L}\\p{N}-])`, "giu");
+  // Consume the entire number, including compounds, but allow a following
+  // hyphenated noun such as thirteen-year-old or twenty-one-million.
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}-])(?:(?:one|two|three|four|five|six|seven|eight|nine)[ -]+hundred(?:[ -]+(?:and[ -]+)?${underHundred})?|${underHundred})(?![\\p{L}\\p{N}])`, "giu");
   const values: Record<string, number> = {
     zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
     ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
@@ -128,8 +130,12 @@ export function unsupportedNumericClaims(brief: NvidiaDigestBrief, input: BriefI
   };
   check(brief.summary, brief.summaryArticleIndexes, "Lead");
   brief.highlights.forEach((highlight) => check(`${highlight.whatHappened} ${highlight.whyItMatters}`, [highlight.articleIndex], `Highlight ${highlight.articleIndex}`));
-  brief.sections.forEach((section) => section.paragraphs.forEach((paragraph) =>
-    check(paragraph.text, paragraph.articleIndexes, `Section ${paragraph.articleIndexes.join(",")}`)));
+  brief.sections.forEach((section) => {
+    const indexes = [...new Set(section.paragraphs.flatMap(paragraph => paragraph.articleIndexes))];
+    check(section.title, indexes, `Section ${indexes.join(",")} title`);
+    section.paragraphs.forEach((paragraph) =>
+      check(paragraph.text, paragraph.articleIndexes, `Section ${paragraph.articleIndexes.join(",")}`));
+  });
   brief.watchlist.forEach((item) => check(`${item.signal} ${item.why}`, item.articleIndexes, "Watchlist"));
   return errors.slice(0, 12);
 }

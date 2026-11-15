@@ -40,3 +40,9 @@ Runs on November 12–13 exhausted their AI attempts because grounding interpret
 ## Polish clock labels and shared ranges (2026-11-15)
 
 The November 14 briefing exhausted three generations with `time:20:16` and `1` grounding errors. Its frozen sources contain FAA's `godz. 20.16` restoration time and Nvidia stock purchases between `$1m` and `$5m`. Numeric validation now normalizes dotted Polish times after an explicit clock label and expands shared magnitudes in `między 1 a 5 mln` / `pomiędzy 1 a 5 milionów`. Regression tests reproduce the exact error signatures, exercise the provider-response validation path, and continue rejecting changed times, values, and magnitudes. Rejected provider text is not persisted, so the precise phrasing behind the `1` error cannot be recovered from the production history.
+
+## Validation gaps and continuation cleanup (2026-11-15)
+
+Section titles now pass the same numeric and model-price checks as paragraph text, using only the stories cited by that section. A watchlist item must cite at least one selected story; an empty watchlist remains valid. This closes paths that previously allowed unsupported statements to reach the reader even when paragraph validation succeeded.
+
+English number normalization accepts hyphenated ages and monetary phrases such as `twenty-one-year-old` and `twenty-one-million`, without authorizing their individual number fragments or dropping their magnitude. Continuation requests clear their deadline timer in `finally`, including network and configuration failures, while retaining the five-second abort deadline. Regression tests cover rejection before each fix and the complete provider-response validation path for section titles.

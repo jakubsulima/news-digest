@@ -82,8 +82,8 @@ export function parseLunaBrief(value: unknown, articleCount: number): { brief: N
   } else if (raw.summaryArticleIndexes.some((index) => !highlightIndexes.has(index))) {
     warnings.push("Some lead references are not repeated in highlights.");
   }
-  if (raw.watchlist.some((item) => item.articleIndexes.some((index) => !validIndex(index)))) {
-    errors.push("Watchlist contains an invalid story reference.");
+  if (raw.watchlist.some((item) => !item.articleIndexes.length || item.articleIndexes.some((index) => !validIndex(index)))) {
+    errors.push("Every watchlist item must reference at least one selected story.");
   }
   const fullCount = raw.sections.filter((section) => section.kind === "full").length;
   const targetFullCount = Math.min(8, articleCount);
