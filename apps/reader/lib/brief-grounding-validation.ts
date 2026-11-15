@@ -2,6 +2,27 @@ import type { NvidiaDigestBrief } from "./ai-summary";
 import type { BriefInputV2 } from "./digest-brief-job";
 import { unsupportedModelPriceClaims } from "./brief-price-validation";
 
+function normalizeEnglishNumberWords(text: string) {
+  const small = "zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen";
+  const tens = "twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety";
+  const underHundred = `(?:(?:${tens})(?:[ -]+(?:${small}))?|(?:${small}))`;
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}-])(?:(?:one|two|three|four|five|six|seven|eight|nine) hundred(?: (?:and )?${underHundred})?|${underHundred})(?![\\p{L}\\p{N}-])`, "giu");
+  const values: Record<string, number> = {
+    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+    ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+    seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40,
+    fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+  };
+  return text.replace(pattern, phrase => {
+    let value = 0;
+    for (const word of phrase.toLowerCase().split(/[ -]+/u)) {
+      if (word === "hundred") value *= 100;
+      else if (word !== "and") value += values[word];
+    }
+    return String(value);
+  });
+}
+
 function numericValues(text: string, source = false) {
   // Be conservative for old frozen inputs without a language tag: recognize
   // comma grouping only in clearly English prose, never in Polish output.
@@ -9,14 +30,21 @@ function numericValues(text: string, source = false) {
   const polishMarkers = new Set(text.toLowerCase().match(/(?<!\p{L})(?:oraz|jest|wynosi|który|które|się|przez|państwa|budżetu|wonów)(?!\p{L})/gu) || []);
   const englishGrouping = source && englishMarkers.size >= 3 && !/\b(?:oraz|jest|wynosi|który|które|się)\b/iu.test(text);
   if (englishGrouping) {
-    text = text.replace(/(?<![\d.,])\b\d{1,3}(?:,\d{3})+(?:\.\d+)?(?![\d,])/gu, value => value.replace(/,/gu, ""));
+    text = text.replace(/(?<![\d.,])\b\d{1,3}(?:,\d{3})+(?:\.\d+)?(?!\d|,\d)/gu, value => value.replace(/,/gu, ""));
   }
   if (source) {
     const dozens: Record<string, number> = { "half a": 6, a: 12, one: 12, two: 24, three: 36 };
     text = text.replace(/\b(half a|a|one|two|three) dozen\b/giu, (_, count: string) => String(dozens[count.toLowerCase()]));
+    text = normalizeEnglishNumberWords(text);
   }
   const times = new Set<string>();
   const suffixedValues = new Set<string>();
+  // English publishers also write 3.30am. Require AM/PM so an ordinary
+  // decimal such as 3.30 seconds can never authorize a clock time.
+  text = text.replace(/\b(\d{1,2})\.([0-5]\d)(?=\s*[ap]\.?m\.?(?!\w))/giu, "$1:$2");
+  // Polish sources use a dot after an explicit clock label. Do not treat
+  // unlabelled decimals (prices, measurements, versions) as clock times.
+  text = text.replace(/(\bgodz(?:ina|inie|iny)?\.?\s+)([01]?\d|2[0-3])\.([0-5]\d)(?!\d)/giu, "$1$2:$3");
   // Compare whole clock times, not their hour/minute fragments. A translation
   // from 10:00 p.m. to 22:00 must not authorize an unrelated quantity of 22.
   const withoutTimes = text.replace(/\b(\d{1,2})(?::([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?|(\s*(?:a\.?m\.?|p\.?m\.?)))(?!\w)/giu,
@@ -52,6 +80,14 @@ function numericValues(text: string, source = false) {
     // trillion; require language evidence because English bln means billion.
     .replace(/(\d+(?:[.,]\d+)?)\s*bln\b\.?/giu,
       (match, coefficient: string) => source && polishMarkers.size < 2 ? match : `${coefficient} trillion`)
+    // The Polish between/and form also shares the final magnitude. Require
+    // the leading marker so unrelated counts joined by "a" stay separate.
+    .replace(/\b((?:po)?między)\s+(\d+(?:[.,]\d+)?)\s+a\s+(\d+(?:[.,]\d+)?)\s*(thousand|million|billion|trillion|tys|mln|mld|bn|mn)\b/giu,
+      (_, marker: string, from: string, to: string, unit: string) => `${marker} ${from} ${unit} – ${to} ${unit}`)
+    // A range shares its trailing magnitude: 15–16 mld means 15bn–16bn.
+    // Expand before scaling so the first endpoint is never compared as 15.
+    .replace(/\b(\d+(?:[.,]\d+)?)\s*(?:[–—-]|do\b|to\b)\s*([$£€]?\s*)(\d+(?:[.,]\d+)?)\s*(thousand|million|billion|trillion|tys|mln|mld|bn|mn)\b/giu,
+      (_, from: string, _currency: string, to: string, unit: string) => `${from} ${unit} – ${to} ${unit}`)
     // English attributive amounts use a hyphen: a $14-billion arms deal.
     .replace(/(\d+(?:[.,]\d+)?)[\s\u2010\u2011-]*(thousand|million|billion|trillion|tys|mln|mld|bn|mn)\b\.?/giu,
       (_, coefficient: string, unit: string) => {
@@ -69,14 +105,25 @@ export function unsupportedNumericClaims(brief: NvidiaDigestBrief, input: BriefI
   const errors: string[] = [];
   const check = (text: string, articleIndexes: number[], label: string) => {
     const articles = [...new Set(articleIndexes)].flatMap((index) => input.articles[index] ? [input.articles[index]] : []);
+    // A publisher's numeric brand is attribution, not a factual quantity.
+    // Match only cited publishers, including the name without its English
+    // edition label. Strip the whole name on both sides rather than allowing
+    // its digits as unrelated counts in the briefing.
+    const publishers = [...new Set(articles.flatMap(article => [article.source, ...article.sourceMaterials.map(material => material.source)])
+      .flatMap(name => [name.trim(), name.trim().replace(/\s+English$/iu, "")])
+      .filter(name => /\d/u.test(name)))].sort((a, b) => b.length - a.length);
+    const publisherPattern = publishers.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${publishers
+      .map(name => name.split(/\s+/u).map(part => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("\\s+"))
+      .join("|")})(?![\\p{L}\\p{N}])`, "giu") : null;
+    const withoutPublishers = (value: string) => publisherPattern ? value.replace(publisherPattern, " ") : value;
     const sourceTexts = articles.flatMap((article) => {
       const readable = article.sourceMaterials.filter((material) => material.contentMode === "readable");
       const materials = readable.length ? readable : article.sourceMaterials;
       const storyContext = [article.title, ...(readable.length ? [] : [article.summary])].join("\n");
       return materials.length ? materials.map((material) => `${storyContext}\n${material.title}\n${material.text}`) : [storyContext];
     });
-    const sourceValues = new Set(sourceTexts.flatMap(text => [...numericValues(text, true)]));
-    const missing = [...numericValues(text)].filter((value) => !sourceValues.has(value));
+    const sourceValues = new Set(sourceTexts.flatMap(text => [...numericValues(withoutPublishers(text), true)]));
+    const missing = [...numericValues(withoutPublishers(text))].filter((value) => !sourceValues.has(value));
     if (missing.length) errors.push(`${label} contains numbers absent from its cited sources: ${missing.slice(0, 8).join(", ")}.`);
   };
   check(brief.summary, brief.summaryArticleIndexes, "Lead");

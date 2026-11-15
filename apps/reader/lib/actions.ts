@@ -2,8 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 
 import { retryDigestBrief, retryFailedDigestRun } from "./digest-runs";
+import { scheduleDigestRunContinuation } from "./digest-run-continuation";
+import { advanceDigestRunUntilIdle } from "./digest-stage-executor";
 import {
   digestSettingsFromFormData,
   isDigestSettingsSchemaError,
@@ -38,15 +41,26 @@ function sourceSettingsRedirect(status: string, formData: FormData) {
   redirect(`/settings?${params.toString()}`);
 }
 
+function advanceRetriedRun(run: { id: string; status: string } | null) {
+  if (!run || !["queued", "running"].includes(run.status)) return;
+  after(async () => {
+    try {
+      await advanceDigestRunUntilIdle(run.id, { scheduleContinuation: scheduleDigestRunContinuation });
+    } catch (error) {
+      console.error("Background digest retry failed", { runId: run.id, error: errorMessage(error) });
+    }
+  });
+}
+
 export async function retryDigestRun(digestRunId: string) {
   await requireCurrentOperator();
-  await retryFailedDigestRun(digestRunId);
+  advanceRetriedRun(await retryFailedDigestRun(digestRunId));
   revalidatePath("/");
 }
 
 export async function retryAiDigestBrief(digestRunId: string) {
   await requireCurrentOperator();
-  await retryDigestBrief(digestRunId);
+  advanceRetriedRun(await retryDigestBrief(digestRunId));
   revalidatePath("/");
 }
 
