@@ -30,6 +30,14 @@ it("allows prices attributed to the right model", () => {
     .toEqual([]);
 });
 
+it("rejects price misattribution in a section title", () => {
+  const value = brief("Ceny modeli zmieniły się.");
+  value.sections[0].title = "Opus 5.5 kosztuje 1 USD/5 USD";
+  expect(unsupportedModelPriceClaims(value, input)).toEqual([expect.stringContaining("title attributes price 1/5 to opus 5.5")]);
+  value.sections[0].title = "Opus 5.5 kosztuje 4 USD/20 USD";
+  expect(unsupportedModelPriceClaims(value, input)).toEqual([]);
+});
+
 it("rejects a price pair absent from the excerpt and accepts an explicit input/output pair", () => {
   const withoutHaiku = structuredClone(input);
   withoutHaiku.articles[0].sourceMaterials[0].text = "Opus 4.5, 4.6, 4.7, 4.8, and 5 all shared the same price: $5/million tokens for input and $25/million for output. 5.5 is a 20% reduction—$4/million and $20/million.";

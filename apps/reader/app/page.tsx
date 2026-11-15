@@ -14,6 +14,7 @@ import { getReaderLocale } from "@/lib/reader-locale-server";
 import { createSupabaseServerClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 async function signOut() {
   "use server";
@@ -63,6 +64,7 @@ export default async function HomePage() {
         className="mx-auto flex w-full max-w-4xl scroll-mt-20 flex-col gap-0 px-4 md:gap-4 md:px-6 md:py-6"
       >
         <DigestRunPanel
+          key={`${digestRun?.id}:${digestRun?.status}:${digestRun?.briefJob?.status}`}
           initialRun={digestRun}
           storyCount={feedPage.totalCount}
           retrySlot={

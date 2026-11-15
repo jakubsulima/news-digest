@@ -19,6 +19,48 @@ function brief(text: string): NvidiaDigestBrief {
     sections: [{ category: "business", title: "Acme", paragraphs: [{ articleIndexes: [0], text }] }] };
 }
 
+it.each([["thirteen-year-old", 13], ["twenty-one-year-old", 21], ["one-hundred-year-old", 100]])("recognizes a hyphenated age: %s", (age, count) => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = `The ${age} company announced its expansion.`;
+  expect(unsupportedNumericClaims(brief(`Firma działa od ${count} lat.`), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief(`Firma działa od ${count + 1} lat.`), article)).toEqual([expect.stringContaining(`sources: ${count + 1}`)]);
+  if (count === 21) expect(unsupportedNumericClaims(brief("Firma działa od 1 roku."), article)).toEqual([expect.stringContaining("sources: 1.")]);
+});
+
+it("validates section titles against their own cited story", () => {
+  const value = brief("Acme podpisała nowe umowy.");
+  value.sections[0].title = "Acme podpisała 13 umów";
+  expect(unsupportedNumericClaims(value, input)).toEqual([expect.stringContaining("title contains numbers absent from its cited sources: 13")]);
+  value.sections[0].title = "Acme podpisała 12 umów";
+  expect(unsupportedNumericClaims(value, input)).toEqual([]);
+});
+
+it("preserves the magnitude in a hyphenated English number phrase", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "The company signed a twenty-one-million dollar deal.";
+  expect(unsupportedNumericClaims(brief("Firma podpisała umowę wartą 21 mln dolarów."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Firma podpisała 21 umów."), article)).toEqual([expect.stringContaining("sources: 21.")]);
+  expect(unsupportedNumericClaims(brief("Firma podpisała umowę wartą 1 mln dolarów."), article)).toEqual([expect.stringContaining("sources: 1000000.")]);
+});
+
+it("accepts the production FAA clock time only with an explicit Polish time marker", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "FAA poinformowała o przywróceniu ruchu tuż po godz. 20.16 czasu wschodnioamerykańskiego, po ponad 4,5 godzinach.";
+  expect(unsupportedNumericClaims(brief("FAA przywróciła ruch po godz. 20:16, po ponad 4,5 godzinach."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("FAA przywróciła ruch o 20:17."), article)).toEqual([expect.stringContaining("time:20:17")]);
+  expect(unsupportedNumericClaims(brief("Opóźnienie wyniosło 20,16 godziny."), article)).toEqual([expect.stringContaining("sources: 20.16")]);
+  article.articles[0].sourceMaterials[0].text = "Opóźnienie wyniosło 20.16 sekundy.";
+  expect(unsupportedNumericClaims(brief("Ruch przywrócono o 20:16."), article)).toEqual([expect.stringContaining("time:20:16")]);
+});
+
+it.each(["między 1 a 5 mln", "pomiędzy 1 a 5 milionów"])("accepts the production Nvidia stock range written as %s", range => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "In the days before he rescinded the rule, Trump bought between $1m and $5m worth of Nvidia stock.";
+  expect(unsupportedNumericClaims(brief(`Trump kupił akcje Nvidii za ${range} dolarów.`), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Trump kupił akcje za między 1 a 6 mln dolarów."), article)).toEqual([expect.stringContaining("6000000")]);
+  expect(unsupportedNumericClaims(brief("Trump kupił akcje za między 1 a 5 mld dolarów."), article)).toEqual([expect.stringContaining("1000000000, 5000000000")]);
+});
+
 it("accepts the cited France 24 publisher without authorizing an unrelated count of 24", () => {
   const article = structuredClone(input);
   article.articles[0].source = "France 24 English";
@@ -46,6 +88,36 @@ it("accepts the production Microsoft outage time written as 3.30am GMT", () => {
   expect(unsupportedNumericClaims(brief("Microsoft wyłączył 3,3 serwera."), article)).toEqual([expect.stringContaining("sources: 3.3")]);
   article.articles[0].sourceMaterials[0].text = "The delay was 3.30 seconds.";
   expect(unsupportedNumericClaims(brief("Awaria zaczęła się o 03:30."), article)).toEqual([expect.stringContaining("time:03:30")]);
+});
+
+it.each(["15–16 mld", "15-16 miliardów", "od 15 do 16 mld"])("accepts the Intel revenue range written as %s", range => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Intel offered revenue guidance of $15 billion to $16 billion for its next quarter.";
+  expect(unsupportedNumericClaims(brief(`Intel prognozuje przychody ${range} dolarów.`), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Intel prognozuje od 15 do 17 mld dolarów."), article)).toEqual([expect.stringContaining("17000000000")]);
+  expect(unsupportedNumericClaims(brief("Intel prognozuje od 15 do 16 mln dolarów."), article)).toEqual([expect.stringContaining("15000000, 16000000")]);
+});
+
+it("recognizes the production AMD decline written in English words", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Sales in the client and gaming segment slid eight percent to $3.7 billion, worse than the five percent fall at Intel.";
+  expect(unsupportedNumericClaims(brief("Sprzedaż AMD spadła o 8 proc., a Intela o 5 proc."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Sprzedaż spadła o 9 proc."), article)).toEqual([expect.stringContaining("sources: 9")]);
+});
+
+it("recognizes the production suspect count without treating compound numbers as their digits", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Thirteen people have been named as suspects, including two Russians. Twenty-eight people and one hundred and five officers were questioned.";
+  expect(unsupportedNumericClaims(brief("Jest 13 podejrzanych, w tym 2 Rosjan. Przesłuchano 28 osób i 105 funkcjonariuszy."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Przesłuchano 8 osób i 5 funkcjonariuszy."), article)).toEqual([expect.stringContaining("8, 5")]);
+});
+
+it("recognizes a grouped troop count followed by a punctuation comma", () => {
+  const article = structuredClone(input);
+  article.articles[0].sourceMaterials[0].text = "Troops from outside the capital were to start arriving, bringing the total to 20,980, according to the navy.";
+  expect(unsupportedNumericClaims(brief("Łącznie skierowano 20 980 żołnierzy."), article)).toEqual([]);
+  expect(unsupportedNumericClaims(brief("Skierowano 20 981 żołnierzy."), article)).toEqual([expect.stringContaining("20981")]);
+  expect(unsupportedNumericClaims(brief("Skierowano 20,98 żołnierzy."), article)).toEqual([expect.stringContaining("20.98")]);
 });
 
 it("accepts Polish bln in the production Korean budget source", () => {
